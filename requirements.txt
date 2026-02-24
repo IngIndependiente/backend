@@ -1,0 +1,39 @@
+# LangGraph y LLM
+langgraph>=0.3.0
+langchain>=0.3.18
+langchain-core>=0.3.51
+langchain-google-genai>=2.0.5
+langchain-google-vertexai>=3.2.0
+google-generativeai>=0.8.3
+google-cloud-aiplatform>=1.97.0
+google-auth>=2.36.0
+
+# Base de datos
+sqlalchemy>=2.0.36
+alembic==1.13.1
+
+# Backend API
+fastapi==0.109.0
+uvicorn[standard]==0.27.0
+python-multipart==0.0.6
+pydantic
+pydantic-settings
+email-validator  # Requerido para EmailStr en Pydantic
+
+# Frontend Dash
+dash==2.14.2
+dash-bootstrap-components==1.5.0
+pandas
+plotly==5.18.0
+
+# Meta API
+requests==2.31.0
+facebook-sdk==3.1.0
+
+# Utilidades
+python-dotenv==1.0.0
+python-dateutil==2.8.2
+
+# Testing
+pytest==7.4.4
+pytest-asyncio==0.23.3
