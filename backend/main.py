@@ -204,7 +204,6 @@ async def facebook_login(candidato_email: Optional[str] = Query(None)):
     
     # Scopes necesarios para multi-tenant
     scopes = [
-        "email",
         "business_management",
         "pages_show_list",
         "pages_messaging",
@@ -265,7 +264,9 @@ async def facebook_callback(
         user_response.raise_for_status()
         user_data = user_response.json()
         
-        user_email = user_data.get('email')
+        # Email: Facebook Business apps no devuelven email via scope.
+        # Usamos el email del state (candidato_email que inició el flujo OAuth) como fallback.
+        user_email = user_data.get('email') or (state if state and '@' in state else None)
         user_name = user_data.get('name')
         
         # 3. VALIDAR SI USUARIO ESTÁ AUTORIZADO (LISTA BLANCA)
