@@ -233,7 +233,7 @@ async def facebook_login(candidato_email: Optional[str] = Query(None)):
 async def facebook_callback(
     code: str = Query(...),
     state: str = Query(None),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db_session)
 ):
     """
     Callback de Facebook OAuth.
@@ -450,7 +450,7 @@ async def facebook_callback(
                 
                 // Redirigir al dashboard después de 1 segundo
                 setTimeout(() => {{
-                    window.location.href = 'http://localhost:8050/?show_pages_modal=true';
+                    window.location.href = '{config.FRONTEND_URL}/?show_pages_modal=true';
                 }}, 1000);
             </script>
         </body>
