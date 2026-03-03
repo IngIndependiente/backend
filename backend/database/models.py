@@ -222,6 +222,7 @@ class UsuarioAutorizado(Base):
     nombre = Column(String(200), nullable=False)
     rol = Column(String(50), default='candidato')  # 'candidato', 'admin', 'equipo'
     activo = Column(Integer, default=1)  # 1=activo, 0=inactivo (usar Integer por compatibilidad SQLite)
+    facebook_user_id = Column(String(50), unique=True, nullable=True)  # ID de usuario en Facebook
     
     # Auditoría
     fecha_registro = Column(DateTime, default=datetime.utcnow)

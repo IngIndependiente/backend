@@ -1,5 +1,5 @@
 """Configuración y conexión a la base de datos."""
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker, Session
 from contextlib import contextmanager
 from backend import config
@@ -19,6 +19,27 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 def init_db():
     """Inicializar la base de datos creando todas las tablas."""
     Base.metadata.create_all(bind=engine)
+    
+    # Migración: agregar columna facebook_user_id si no existe
+    try:
+        with engine.connect() as conn:
+            if "sqlite" in config.DATABASE_URL:
+                result = conn.execute(text("PRAGMA table_info(usuarios_autorizados)"))
+                columns = [row[1] for row in result]
+                if "facebook_user_id" not in columns:
+                    conn.execute(text("ALTER TABLE usuarios_autorizados ADD COLUMN facebook_user_id VARCHAR(50) UNIQUE"))
+                    conn.commit()
+                    print("✓ Columna facebook_user_id agregada a usuarios_autorizados")
+            else:
+                # PostgreSQL
+                conn.execute(text("""
+                    ALTER TABLE usuarios_autorizados
+                    ADD COLUMN IF NOT EXISTS facebook_user_id VARCHAR(50) UNIQUE
+                """))
+                conn.commit()
+                print("✓ Columna facebook_user_id agregada a usuarios_autorizados")
+    except Exception as e:
+        print(f"Migración facebook_user_id (puede ser normal si ya existe): {e}")
     
     # Crear categorías de intereses predeterminadas
     session = SessionLocal()

@@ -30,7 +30,12 @@ except Exception as e:
 from backend.integrations.meta_api import meta_client, crear_cliente_candidato
 from backend.integrations.whatsapp_api import whatsapp_client
 import requests
+import uuid
 from urllib.parse import urlencode
+
+# Store temporal para sesiones OAuth (pages pendientes de confirmar)
+# Se limpia en /api/oauth-session/{token} o en el siguiente login
+_oauth_sessions: dict = {}
 
 # Imports condicionales para SQLAlchemy
 if not USE_DATAFRAMES:
@@ -108,6 +113,7 @@ class UsuarioCreate(BaseModel):
     email: EmailStr
     nombre: str
     rol: str = "candidato"  # candidato, admin, equipo
+    facebook_user_id: Optional[str] = None
 
 
 class UsuarioUpdate(BaseModel):
@@ -115,6 +121,7 @@ class UsuarioUpdate(BaseModel):
     nombre: Optional[str] = None
     rol: Optional[str] = None
     activo: Optional[int] = None
+    facebook_user_id: Optional[str] = None
 
 
 class UsuarioResponse(BaseModel):
@@ -124,6 +131,7 @@ class UsuarioResponse(BaseModel):
     nombre: str
     rol: str
     activo: int
+    facebook_user_id: Optional[str] = None
     fecha_registro: datetime
     ultimo_acceso: Optional[datetime]
     
@@ -268,17 +276,31 @@ async def facebook_callback(
         # Usamos el email del state (candidato_email que inició el flujo OAuth) como fallback.
         user_email = user_data.get('email') or (state if state and '@' in state else None)
         user_name = user_data.get('name')
+        facebook_id = user_data.get('id')  # ID único de Facebook, siempre disponible
         
         # 3. VALIDAR SI USUARIO ESTÁ AUTORIZADO (LISTA BLANCA)
         # Solo si config.VALIDAR_USUARIOS está activado (producción)
         if config.VALIDAR_USUARIOS:
             from backend.database.models import UsuarioAutorizado
             
-            # Verificar si el email está en la lista de usuarios autorizados
-            usuario_autorizado = db.query(UsuarioAutorizado).filter(
-                UsuarioAutorizado.email == user_email,
-                UsuarioAutorizado.activo == 1
-            ).first()
+            # Buscar primero por facebook_user_id (más confiable)
+            usuario_autorizado = None
+            if facebook_id:
+                usuario_autorizado = db.query(UsuarioAutorizado).filter(
+                    UsuarioAutorizado.facebook_user_id == facebook_id,
+                    UsuarioAutorizado.activo == 1
+                ).first()
+            
+            # Fallback: buscar por email si no se encontró por facebook_user_id
+            if not usuario_autorizado and user_email:
+                usuario_autorizado = db.query(UsuarioAutorizado).filter(
+                    UsuarioAutorizado.email == user_email,
+                    UsuarioAutorizado.activo == 1
+                ).first()
+                # Auto-vincular el facebook_user_id para futuros logins
+                if usuario_autorizado and facebook_id:
+                    usuario_autorizado.facebook_user_id = facebook_id
+                    db.commit()
             
             if not usuario_autorizado:
                 # Usuario NO autorizado - Mostrar mensaje de acceso denegado
@@ -398,7 +420,10 @@ async def facebook_callback(
                 "instagram_username": instagram_username
             })
         
-        # 4. Retornar HTML que envía las páginas al dashboard para selección
+        # 4. Guardar páginas en store temporal con token y redirigir al frontend
+        oauth_token = str(uuid.uuid4())
+        _oauth_sessions[oauth_token] = pages_info
+        
         from fastapi.responses import HTMLResponse
         
         html_content = f"""
@@ -446,13 +471,9 @@ async def facebook_callback(
                 <p>Redirigiendo al dashboard para seleccionar páginas...</p>
             </div>
             <script>
-                // Guardar páginas en sessionStorage
-                const pagesData = {json.dumps(pages_info)};
-                sessionStorage.setItem('facebook_pages', JSON.stringify(pagesData));
-                
-                // Redirigir al dashboard después de 1 segundo
+                // Redirigir al dashboard con el token OAuth (solución cross-origin)
                 setTimeout(() => {{
-                    window.location.href = '{config.FRONTEND_URL}/?show_pages_modal=true';
+                    window.location.href = '{config.FRONTEND_URL}/?oauth_token={oauth_token}';
                 }}, 1000);
             </script>
         </body>
@@ -470,6 +491,22 @@ async def facebook_callback(
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Error interno: {str(e)}")
+
+
+# =============================================================================
+# === ENDPOINT PARA RECUPERAR PÁGINAS OAUTH (cross-origin safe) ===
+# =============================================================================
+
+@app.get("/api/oauth-session/{token}", tags=["OAuth"])
+async def obtener_oauth_session(token: str):
+    """
+    Devuelve las páginas de Facebook almacenadas temporalmente para un token OAuth.
+    Se elimina automáticamente tras la primera lectura.
+    """
+    pages = _oauth_sessions.pop(token, None)
+    if pages is None:
+        raise HTTPException(status_code=404, detail="Sesión OAuth no encontrada o ya utilizada")
+    return {"pages": pages}
 
 
 # =============================================================================
@@ -516,6 +553,7 @@ async def crear_usuario(
         nombre=usuario.nombre,
         rol=usuario.rol,
         activo=1,
+        facebook_user_id=usuario.facebook_user_id,
         fecha_registro=datetime.utcnow()
     )
     
@@ -573,6 +611,9 @@ async def actualizar_usuario(
     
     if datos.activo is not None:
         usuario.activo = datos.activo
+    
+    if datos.facebook_user_id is not None:
+        usuario.facebook_user_id = datos.facebook_user_id
     
     db.commit()
     db.refresh(usuario)
