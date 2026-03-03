@@ -204,6 +204,7 @@ async def facebook_login(candidato_email: Optional[str] = Query(None)):
     
     # Scopes necesarios para multi-tenant
     scopes = [
+        "email",
         "business_management",
         "pages_show_list",
         "pages_messaging",
@@ -358,7 +359,7 @@ async def facebook_callback(
             </body>
             </html>
             """
-            return HTMLResponse(content=html_denegado, status_code=403)
+                return HTMLResponse(content=html_denegado, status_code=403)
             
             # USUARIO AUTORIZADO - Actualizar último acceso
             usuario_autorizado.ultimo_acceso = datetime.utcnow()

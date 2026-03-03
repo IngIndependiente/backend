@@ -62,7 +62,7 @@ else:
 # False = Acceso abierto para todos (LOCAL/TESTING)
 if IS_WEB_ENV:
     # En producción: validar usuarios (lista blanca)
-    VALIDAR_USUARIOS = os.getenv("VALIDAR_USUARIOS", "True").lower() in ("true", "1", "yes")
+    VALIDAR_USUARIOS = os.getenv("VALIDAR_USUARIOS", "False").lower() in ("true", "1", "yes")
 else:
     # En local: permitir acceso abierto para desarrollo
     VALIDAR_USUARIOS = os.getenv("VALIDAR_USUARIOS", "False").lower() in ("true", "1", "yes")
