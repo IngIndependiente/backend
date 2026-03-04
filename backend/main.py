@@ -1379,7 +1379,8 @@ def _buscar_personas_impl(busqueda: BusquedaRequest):  # noqa: C901
         resultado.sort(key=lambda x: (x['fecha_ultimo_contacto'] or ''), reverse=True)
 
     else:
-        # Modo SQLAlchemy – obtener análisis filtrados por fecha
+        # Modo SQLAlchemy – todo dentro del mismo contexto de sesión para evitar
+        # DetachedInstanceError al acceder a relaciones cargadas perezosamente
         with get_db() as db:
             analisis_candidates = AnalisisService.buscar_analisis(
                 db,
@@ -1387,49 +1388,52 @@ def _buscar_personas_impl(busqueda: BusquedaRequest):  # noqa: C901
                 fecha_fin=dt_fin,
                 limit=1000
             )
-        for analisis in analisis_candidates:
-            persona = analisis.persona
-            if not persona: continue # Safety check
-            
-            # Filtros demográficos
-            if busqueda.genero and persona.genero != busqueda.genero:
-                continue
-            if busqueda.edad_min and (not persona.edad or persona.edad < busqueda.edad_min):
-                continue
-            if busqueda.edad_max and (not persona.edad or persona.edad > busqueda.edad_max):
-                continue
-            if busqueda.ubicacion and (not persona.ubicacion or busqueda.ubicacion.lower() not in persona.ubicacion.lower()):
-                continue
-            if busqueda.intereses:
-                 # Check intersection
-                 p_intereses = [i.categoria for i in persona.intereses]
-                 if not any(i in p_intereses for i in busqueda.intereses):
-                     continue
+            for analisis in analisis_candidates:
+                persona = analisis.persona
+                if not persona: continue # Safety check
 
-            # Formatear intereses
-            intereses = []
-            try:
-                if analisis.categorias: intereses = json.loads(analisis.categorias)
-                elif persona.intereses: intereses = [i.categoria for i in persona.intereses]
-            except: intereses = []
+                # Filtros demográficos
+                if busqueda.genero and persona.genero != busqueda.genero:
+                    continue
+                if busqueda.edad_min and (not persona.edad or persona.edad < busqueda.edad_min):
+                    continue
+                if busqueda.edad_max and (not persona.edad or persona.edad > busqueda.edad_max):
+                    continue
+                if busqueda.ubicacion and (not persona.ubicacion or busqueda.ubicacion.lower() not in persona.ubicacion.lower()):
+                    continue
+                if busqueda.intereses:
+                    p_intereses = [i.categoria for i in persona.intereses]
+                    if not any(i in p_intereses for i in busqueda.intereses):
+                        continue
 
-            resultado.append({
-                "id": persona.id,
-                "analisis_id": analisis.id,
-                "nombre_completo": persona.nombre_completo,
-                "edad": persona.edad,
-                "genero": persona.genero,
-                "telefono": persona.telefono,
-                "email": persona.email,
-                "ocupacion": persona.ocupacion,
-                "ubicacion": persona.ubicacion,
-                "facebook_username": persona.facebook_username,
-                "instagram_username": persona.instagram_username,
-                "intereses": intereses,
-                "resumen_conversacion": analisis.resumen,
-                "fecha_primer_contacto": persona.fecha_primer_contacto,
-                "fecha_ultimo_contacto": analisis.start_conversation or analisis.fecha_analisis
-            })
+                # Formatear intereses
+                intereses = []
+                try:
+                    if analisis.categorias: intereses = json.loads(analisis.categorias)
+                    elif persona.intereses: intereses = [i.categoria for i in persona.intereses]
+                except: intereses = []
+
+                # Fechas como ISO string
+                fpc = analisis.start_conversation or analisis.fecha_analisis
+                resultado.append({
+                    "id": persona.id,
+                    "analisis_id": analisis.id,
+                    "nombre_completo": persona.nombre_completo,
+                    "edad": persona.edad,
+                    "genero": persona.genero,
+                    "telefono": persona.telefono,
+                    "email": persona.email,
+                    "ocupacion": persona.ocupacion,
+                    "ubicacion": persona.ubicacion,
+                    "facebook_username": getattr(persona, "facebook_username", None),
+                    "instagram_username": getattr(persona, "instagram_username", None),
+                    "intereses": intereses,
+                    "resumen_conversacion": analisis.resumen,
+                    "fecha_primer_contacto": persona.fecha_primer_contacto.isoformat() if persona.fecha_primer_contacto else None,
+                    "fecha_ultimo_contacto": fpc.isoformat() if fpc else None,
+                    "evento_id": analisis.evento_id,
+                    "evento_nombre": analisis.evento.nombre if analisis.evento else None,
+                })
     
     # 4. Calcular Estadísticas Filtradas
     generos = [p["genero"] or "No especificado" for p in resultado]
