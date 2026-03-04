@@ -48,7 +48,8 @@ def procesar_mensajes_usuario(
     username: str,
     plataforma: str,
     mensajes: List[Dict[str, Any]],
-    ignorar_id: str = None
+    ignorar_id: str = None,
+    force_reprocess: bool = False
 ):
     """Procesa todo el historial de mensajes de un usuario."""
     print(f"\n👤 Procesando historial de: {username or user_id} ({len(mensajes)} mensajes)")
@@ -193,9 +194,11 @@ def procesar_mensajes_usuario(
                 Analisis.start_conversation <= dia_fin_utc
             ).first() is not None
 
-        if analisis_existente:
+        if analisis_existente and not force_reprocess:
             print(f"   ⏩ Día {fecha_cl} ya analizado previamente. Saltando...")
             continue
+        elif analisis_existente and force_reprocess:
+            print(f"   🔄 Día {fecha_cl} ya existe pero se re-procesa (force_reprocess=True)...")
 
         # Texto concatenado de la sesión
         texto_sesion = "\n".join([m.get("message", "") for m in sesion])

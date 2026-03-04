@@ -836,7 +836,8 @@ async def sincronizar_candidato(
     candidato_id: int,
     sincronizar_facebook: bool = Query(True),
     sincronizar_instagram: bool = Query(True),
-    limit: int = Query(10, ge=1, le=100)
+    limit: int = Query(10, ge=1, le=100),
+    force_reprocess: bool = Query(False)
 ):
     """
     Sincronizar conversaciones de Facebook e Instagram de un candidato.
@@ -871,12 +872,14 @@ async def sincronizar_candidato(
         # Sincronizar Facebook Messenger en thread pool (no bloquea el event loop)
         if sincronizar_facebook and candidato.get('facebook_page_id'):
             try:
+                _fb_force = force_reprocess
                 await loop.run_in_executor(None, lambda: sincronizar_conversaciones_tarea(
                     cliente=cliente,
                     page_id=candidato['facebook_page_id'],
                     plataforma="facebook",
                     limit=limit,
-                    candidato_id=candidato_id
+                    candidato_id=candidato_id,
+                    force_reprocess=_fb_force
                 ))
                 result["sincronizaciones"].append("Facebook Messenger OK")
             except Exception as e:
@@ -885,12 +888,14 @@ async def sincronizar_candidato(
         # Sincronizar Instagram Direct en thread pool
         if sincronizar_instagram and candidato.get('instagram_business_account_id'):
             try:
+                _ig_force = force_reprocess
                 await loop.run_in_executor(None, lambda: sincronizar_conversaciones_tarea(
                     cliente=cliente,
                     page_id=candidato['instagram_business_account_id'],
                     plataforma="instagram",
                     limit=limit,
-                    candidato_id=candidato_id
+                    candidato_id=candidato_id,
+                    force_reprocess=_ig_force
                 ))
                 result["sincronizaciones"].append("Instagram Direct OK")
             except Exception as e:
@@ -917,7 +922,8 @@ def sincronizar_conversaciones_tarea(
     page_id: str,
     plataforma: str,
     limit: int,
-    candidato_id: int
+    candidato_id: int,
+    force_reprocess: bool = False
 ):
     """
     Tarea en background para sincronizar conversaciones.
@@ -989,7 +995,8 @@ def sincronizar_conversaciones_tarea(
                     username=username,
                     plataforma=plataforma,
                     mensajes=mensajes,
-                    ignorar_id=page_id
+                    ignorar_id=page_id,
+                    force_reprocess=force_reprocess
                 )
                 
                 print(f"      ✅ Procesado: {username or user_id} ({len(mensajes)} mensajes)")
