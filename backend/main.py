@@ -795,20 +795,15 @@ def listar_candidatos():
 @app.post("/api/candidatos/{candidato_id}/sincronizar")
 async def sincronizar_candidato(
     candidato_id: int,
-    background_tasks: BackgroundTasks,
     sincronizar_facebook: bool = Query(True),
     sincronizar_instagram: bool = Query(True),
     limit: int = Query(10, ge=1, le=100)
 ):
     """
     Sincronizar conversaciones de Facebook e Instagram de un candidato.
-    
-    Args:
-        candidato_id: ID del candidato
-        sincronizar_facebook: Si sincronizar Facebook Messenger
-        sincronizar_instagram: Si sincronizar Instagram Direct
-        limit: Número máximo de conversaciones a sincronizar por plataforma
+    Se ejecuta de forma síncrona en un thread para no bloquear el event loop.
     """
+    import asyncio
     try:
         # Obtener candidato
         candidato = CandidatoService.obtener_candidato_por_id(candidato_id)
@@ -828,37 +823,44 @@ async def sincronizar_candidato(
         result = {
             "candidato_id": candidato_id,
             "nombre": candidato.get('nombre'),
-            "sincronizaciones": []
+            "sincronizaciones": [],
+            "errores": []
         }
         
-        # Sincronizar Facebook Messenger
+        loop = asyncio.get_event_loop()
+        
+        # Sincronizar Facebook Messenger en thread pool (no bloquea el event loop)
         if sincronizar_facebook and candidato.get('facebook_page_id'):
-            background_tasks.add_task(
-                sincronizar_conversaciones_tarea,
-                cliente=cliente,
-                page_id=candidato['facebook_page_id'],
-                plataforma="facebook",
-                limit=limit,
-                candidato_id=candidato_id
-            )
-            result["sincronizaciones"].append("Facebook Messenger programado")
+            try:
+                await loop.run_in_executor(None, lambda: sincronizar_conversaciones_tarea(
+                    cliente=cliente,
+                    page_id=candidato['facebook_page_id'],
+                    plataforma="facebook",
+                    limit=limit,
+                    candidato_id=candidato_id
+                ))
+                result["sincronizaciones"].append("Facebook Messenger OK")
+            except Exception as e:
+                result["errores"].append(f"Facebook: {str(e)}")
         
-        # Sincronizar Instagram Direct
+        # Sincronizar Instagram Direct en thread pool
         if sincronizar_instagram and candidato.get('instagram_business_account_id'):
-            background_tasks.add_task(
-                sincronizar_conversaciones_tarea,
-                cliente=cliente,
-                page_id=candidato['instagram_business_account_id'],
-                plataforma="instagram",
-                limit=limit,
-                candidato_id=candidato_id
-            )
-            result["sincronizaciones"].append("Instagram Direct programado")
+            try:
+                await loop.run_in_executor(None, lambda: sincronizar_conversaciones_tarea(
+                    cliente=cliente,
+                    page_id=candidato['instagram_business_account_id'],
+                    plataforma="instagram",
+                    limit=limit,
+                    candidato_id=candidato_id
+                ))
+                result["sincronizaciones"].append("Instagram Direct OK")
+            except Exception as e:
+                result["errores"].append(f"Instagram: {str(e)}")
         
-        if not result["sincronizaciones"]:
+        if not result["sincronizaciones"] and not result["errores"]:
             result["mensaje"] = "No hay cuentas configuradas para sincronizar"
         else:
-            result["mensaje"] = "Sincronización iniciada en background"
+            result["mensaje"] = "Sincronización completada"
         
         return result
         
@@ -939,7 +941,7 @@ def sincronizar_conversaciones_tarea(
                 username = user_participant.get("name") or user_participant.get("username")
                 
                 # Importar función de procesamiento
-                from sync_conversations import procesar_mensajes_usuario
+                from backend.sync_conversations import procesar_mensajes_usuario
                 
                 # Procesar mensajes del usuario
                 procesar_mensajes_usuario(

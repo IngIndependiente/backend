@@ -2,21 +2,29 @@
 import threading
 import time
 import traceback
-import uvicorn
 import socket
 import sys
 import io
 import contextlib
+import pytz as _pytz
+import datetime as _dt
 
 from backend import config
 from backend import sync_conversations
 from backend.database.dataframe_storage import get_storage
 from pathlib import Path
 from typing import Optional
+import requests as _requests
 
 _lock = threading.RLock()
+_TZ_CL = _pytz.timezone('America/Santiago')
+
+def _ts_cl():
+    """Timestamp actual en hora de Santiago."""
+    return _dt.datetime.now(_TZ_CL).strftime('%Y-%m-%d %H:%M:%S')
+
 _server_thread: Optional[threading.Thread] = None
-_server_obj: Optional[uvicorn.Server] = None
+_server_obj = None
 _status = {"state": "idle", "message": "", "last": None}
 _logs = []
 _max_logs = 2000
@@ -26,7 +34,7 @@ def _append_log(line: str):
     with _lock:
         # normalizar y dividir por líneas
         for l in str(line).splitlines():
-            ts = time.strftime("%Y-%m-%d %H:%M:%S")
+            ts = _ts_cl()
             entry = f"[{ts}] {l}"
             _logs.append(entry)
             # mantener tamaño
@@ -58,6 +66,7 @@ def get_status():
 def _uvicorn_runner():
     global _server_obj
     try:
+        import uvicorn
         cfg = uvicorn.Config(
             "backend.main:app",
             host=config.BACKEND_HOST,

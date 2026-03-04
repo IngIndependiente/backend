@@ -4,15 +4,18 @@ from datetime import datetime, timedelta
 from typing import List, Dict, Any
 from sqlalchemy.orm import Session
 import dateutil.parser
+import pytz
 
 from backend import config
 from backend.database.storage import get_db, init_db, PersonaService, ConversacionService, AnalisisService, USE_DATAFRAMES
 from backend.agent.langgraph_agent import procesar_conversacion
 from backend.integrations.meta_api import meta_client
 
+_TZ_CL = pytz.timezone('America/Santiago')
+
 
 def agrupar_mensajes_por_dia_cl(mensajes: List[Dict[str, Any]]) -> List[List[Dict[str, Any]]]:
-    """Agrupa mensajes por día calendario en zona horaria UTC-3 (Chile)."""
+    """Agrupa mensajes por día calendario en zona horaria de Santiago de Chile."""
     if not mensajes:
         return []
         
@@ -23,8 +26,10 @@ def agrupar_mensajes_por_dia_cl(mensajes: List[Dict[str, Any]]) -> List[List[Dic
     
     for msg in mensajes_ord:
         t_utc = dateutil.parser.isoparse(msg.get("created_time"))
-        # Ajustar a UTC-3 (Chile)
-        t_cl = t_utc - timedelta(hours=3)
+        # Convertir a zona horaria de Santiago (respeta DST automáticamente)
+        if t_utc.tzinfo is None:
+            t_utc = pytz.utc.localize(t_utc)
+        t_cl = t_utc.astimezone(_TZ_CL)
         fecha_cl = t_cl.date()
         
         if fecha_cl not in sesiones_por_dia:
