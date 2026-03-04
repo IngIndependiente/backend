@@ -203,15 +203,24 @@ def procesar_mensajes_usuario(
         print(f"   🔍 Analizando mensajes del día {fecha_cl} ({len(sesion)} mensajes)...")
         
         # Contexto: usamos la propia sesión como historial
-        resultado = procesar_conversacion(
-            mensaje=texto_sesion, # Enviamos todo el bloque
-            plataforma=plataforma,
-            persona_id=persona_id,
-            historial=[],
-            nombre_usuario=username
-        )
-        
-        datos = resultado.get("datos_extraidos", {})
+        datos = {}
+        try:
+            resultado = procesar_conversacion(
+                mensaje=texto_sesion,
+                plataforma=plataforma,
+                persona_id=persona_id,
+                historial=[],
+                nombre_usuario=username
+            )
+            datos = resultado.get("datos_extraidos", {})
+            llm_error = resultado.get("error")
+            if llm_error:
+                print(f"   ⚠️  LLM error para {username or user_id} ({fecha_cl}): {llm_error}")
+        except Exception as llm_exc:
+            print(f"   ❌ Excepción LLM para {username or user_id} ({fecha_cl}): {llm_exc}")
+            import traceback
+            traceback.print_exc()
+
         resumen = datos.get("resumen_conversacional") or texto_sesion[:100]
         
         # Actualizar datos demográficos de la persona con lo encontrado en esta sesión

@@ -1214,8 +1214,8 @@ def obtener_persona(persona_id: int):
 from collections import Counter
 
 
-def _safe_date(val):
-    """Convierte fechas Pandas/datetime a string ISO o None."""
+def _safe_val(val):
+    """Convierte cualquier valor pandas (NA, NaT, Timestamp) a tipos Python nativos."""
     if val is None:
         return None
     try:
@@ -1223,14 +1223,39 @@ def _safe_date(val):
             return None
     except Exception:
         pass
-    if hasattr(val, 'isoformat'):
+    if hasattr(val, 'isoformat'):       # Timestamp / datetime
         return val.isoformat()
-    return str(val) if val else None
+    if hasattr(val, 'item'):            # numpy scalar → Python scalar
+        return val.item()
+    return val
+
+
+def _safe_date(val):
+    """Convierte fechas Pandas/datetime a string ISO o None."""
+    v = _safe_val(val)
+    if v is None:
+        return None
+    if isinstance(v, str):
+        return v
+    if hasattr(v, 'isoformat'):
+        return v.isoformat()
+    return str(v)
 
 
 @app.post("/api/personas/buscar")
 def buscar_personas(busqueda: BusquedaRequest):
     """Buscar sesiones/personas según criterios."""
+    try:
+        return _buscar_personas_impl(busqueda)
+    except Exception as exc:
+        import traceback
+        print(f"[ERROR] /api/personas/buscar: {exc}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+def _buscar_personas_impl(busqueda: BusquedaRequest):  # noqa: C901
+    """Implementación real de buscar personas."""
     # 1. Parsear fechas
     dt_inicio = None
     dt_fin = None
@@ -1261,7 +1286,7 @@ def buscar_personas(busqueda: BusquedaRequest):
             adf = adf.sort_values('start_conversation', ascending=False)
             for rec in adf.to_dict('records'):
                 pid = rec.get('persona_id')
-                if pid and pid not in analisis_by_persona:
+                if pd.notna(pid) and pid not in analisis_by_persona:
                     analisis_by_persona[pid] = rec
 
         # Si hay filtro de fecha, limitar a personas con analisis en ese rango
@@ -1323,30 +1348,31 @@ def buscar_personas(busqueda: BusquedaRequest):
             # Evento
             evento_id = None
             evento_nombre = None
-            if analisis and analisis.get('evento_id') and pd.notna(analisis['evento_id']):
+            if analisis and pd.notna(analisis.get('evento_id')):
                 evento_id = int(analisis['evento_id'])
                 ev = EventoService.obtener_por_id(evento_id)
                 if ev:
                     evento_nombre = ev['nombre']
 
+            edad_val = _safe_val(persona.get('edad'))
             resultado.append({
                 "id": int(persona['id']),
                 "analisis_id": int(analisis['id']) if analisis else None,
-                "nombre_completo": persona.get('nombre_completo'),
-                "edad": int(persona['edad']) if pd.notna(persona.get('edad')) else None,
-                "genero": persona.get('genero'),
-                "telefono": persona.get('telefono'),
-                "email": persona.get('email'),
-                "ocupacion": persona.get('ocupacion'),
-                "ubicacion": persona.get('ubicacion'),
-                "facebook_username": persona.get('facebook_username'),
-                "instagram_username": persona.get('instagram_username'),
+                "nombre_completo": _safe_val(persona.get('nombre_completo')),
+                "edad": int(edad_val) if edad_val is not None else None,
+                "genero": _safe_val(persona.get('genero')),
+                "telefono": _safe_val(persona.get('telefono')),
+                "email": _safe_val(persona.get('email')),
+                "ocupacion": _safe_val(persona.get('ocupacion')),
+                "ubicacion": _safe_val(persona.get('ubicacion')),
+                "facebook_username": _safe_val(persona.get('facebook_username')),
+                "instagram_username": _safe_val(persona.get('instagram_username')),
                 "intereses": intereses,
-                "resumen_conversacion": analisis.get('resumen') if analisis else None,
+                "resumen_conversacion": _safe_val(analisis.get('resumen')) if analisis else None,
                 "fecha_primer_contacto": _safe_date(persona.get('fecha_primer_contacto')),
                 "fecha_ultimo_contacto": _safe_date(fecha_ult),
                 "evento_id": evento_id,
-                "evento_nombre": evento_nombre,
+                "evento_nombre": _safe_val(evento_nombre),
             })
 
         # Ordenar por fecha_ultimo_contacto descendente
@@ -1805,6 +1831,60 @@ def obtener_estadisticas():
                 "por_genero": stats_genero,
                 "por_interes": stats_intereses
             }
+
+
+@app.get("/api/debug/status")
+def debug_status():
+    """Estado de los DataFrames y logs de sincronización (solo para depuración)."""
+    info: dict = {"modo": "dataframes" if USE_DATAFRAMES else "sqlalchemy"}
+
+    if USE_DATAFRAMES:
+        from backend.database.dataframe_storage import get_storage
+        try:
+            storage = get_storage()
+            info["personas"] = len(storage.personas_df)
+            info["conversaciones"] = len(storage.conversaciones_df)
+            info["analisis"] = len(storage.analisis_df)
+            info["intereses"] = len(storage.intereses_df)
+            info["candidatos"] = len(storage.candidatos_df)
+            # Muestra de la primera persona si existen
+            if not storage.personas_df.empty:
+                row = storage.personas_df.iloc[0]
+                info["primera_persona"] = {
+                    "id": int(row["id"]),
+                    "nombre": str(row.get("nombre_completo") or ""),
+                    "facebook_id": str(row.get("facebook_id") or ""),
+                }
+            # Muestra si analisis_df tiene datos
+            if not storage.analisis_df.empty:
+                row = storage.analisis_df.iloc[0]
+                info["primer_analisis"] = {
+                    "persona_id": int(row["persona_id"]),
+                    "start_conversation": str(row.get("start_conversation") or ""),
+                }
+        except Exception as e:
+            info["error_storage"] = str(e)
+    else:
+        try:
+            with get_db() as db:
+                from backend.database.models import Persona, Conversacion, Analisis
+                info["personas"] = db.query(Persona).count()
+                info["conversaciones"] = db.query(Conversacion).count()
+                info["analisis"] = db.query(Analisis).count()
+        except Exception as e:
+            info["error_db"] = str(e)
+
+    # Últimas líneas del log de sincronización (si existe)
+    try:
+        from backend import config as _cfg
+        log_path = _cfg.BASE_DIR / "sync_log.txt"
+        if log_path.exists():
+            lines = log_path.read_text(encoding="utf-8").splitlines()
+            info["sync_log"] = lines[-50:]  # últimas 50 líneas
+    except Exception:
+        pass
+
+    return info
 
 
 @app.get("/api/eventos")
