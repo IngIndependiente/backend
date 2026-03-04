@@ -35,9 +35,9 @@ IS_WEB_ENV = ENV != "local"
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 
 # Opción 2: Vertex AI con Service Account (Enterprise)
-#GCP_PROJECT_ID = os.getenv("GCP_PROJECT_ID", None)
+GCP_PROJECT_ID = None
 GCP_LOCATION = os.getenv("GCP_LOCATION", "us-central1")
-#GOOGLE_APPLICATION_CREDENTIALS = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
+GOOGLE_APPLICATION_CREDENTIALS = None
 
 # Modelo a usar
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-lite")
