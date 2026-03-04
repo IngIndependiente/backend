@@ -1214,54 +1214,18 @@ def obtener_persona(persona_id: int):
 from collections import Counter
 
 
-@app.get("/api/personas")
-def listar_personas(limit: int = 100, db: Session = Depends(get_db_session)):
-    """Listar todas las personas."""
+def _safe_date(val):
+    """Convierte fechas Pandas/datetime a string ISO o None."""
+    if val is None:
+        return None
     try:
-        if USE_DATAFRAMES:
-            from backend.database.dataframe_storage import get_storage
-            storage = get_storage()
-            personas_list = storage.personas_df.head(limit).to_dict('records')
-            
-            resultado = []
-            for persona in personas_list:
-                persona_id = persona['id']
-                rel_mask = storage.persona_interes_df['persona_id'] == persona_id
-                interes_ids = storage.persona_interes_df[rel_mask]['interes_id'].values
-                intereses_mask = storage.intereses_df['id'].isin(interes_ids)
-                intereses = storage.intereses_df[intereses_mask]['categoria'].tolist()
-                
-                resultado.append({
-                    "id": persona['id'],
-                    "nombre_completo": persona.get('nombre_completo'),
-                    "edad": persona.get('edad'),
-                    "genero": persona.get('genero'),
-                    "ubicacion": persona.get('ubicacion'),
-                    "intereses": intereses,
-                    "fecha_primer_contacto": persona['fecha_primer_contacto'],
-                    "fecha_ultimo_contacto": persona['fecha_ultimo_contacto']
-                })
-            return resultado
-        else:
-            # Modo SQLAlchemy
-            personas = db.query(Persona).limit(limit).all()
-            return [
-                {
-                    "id": p.id,
-                    "nombre_completo": p.nombre_completo,
-                    "edad": p.edad,
-                    "genero": p.genero,
-                    "ubicacion": p.ubicacion,
-                    "intereses": [i.categoria for i in p.intereses] if p.intereses else [],
-                    "fecha_primer_contacto": p.fecha_primer_contacto,
-                    "fecha_ultimo_contacto": p.fecha_ultimo_contacto
-                }
-                for p in personas
-            ]
-    except Exception as e:
-        # Retornar lista vacía si hay error
-        print(f"[ERROR] /api/personas: {e}")
-        return []
+        if pd.isna(val):
+            return None
+    except Exception:
+        pass
+    if hasattr(val, 'isoformat'):
+        return val.isoformat()
+    return str(val) if val else None
 
 
 @app.post("/api/personas/buscar")
@@ -1279,55 +1243,61 @@ def buscar_personas(busqueda: BusquedaRequest):
              dt_fin = datetime.fromisoformat(busqueda.fecha_fin)
         except: pass
         
-    # 2. Obtener Análisis filtrados por Fecha
-    if USE_DATAFRAMES:
-        # Modo DataFrames - no necesita db
-        analisis_candidates = AnalisisService.buscar_analisis(
-            fecha_inicio=dt_inicio, 
-            fecha_fin=dt_fin,
-            limit=1000 
-        )
-    else:
-        # Modo SQLAlchemy - necesita db
-        with get_db() as db:
-            analisis_candidates = AnalisisService.buscar_analisis(
-                db, 
-                fecha_inicio=dt_inicio, 
-                fecha_fin=dt_fin,
-                limit=1000 
-            )
-        
     resultado = []
     
-    # 3. Filtrar por demografía y construir respuesta
+    # 2. Construir respuesta
     if USE_DATAFRAMES:
+        # Modo DataFrames – empieza desde personas_df y hace LEFT JOIN con analisis_df
         from backend.database.dataframe_storage import get_storage
         storage = get_storage()
-        
-        for analisis in analisis_candidates:
-            persona_id = analisis['persona_id']
-            persona = PersonaService.obtener_persona_por_id(persona_id)
-            
-            if not persona: 
-                continue
-            
-            # Filtros demográficos
-            if busqueda.genero and persona.get('genero') != busqueda.genero:
-                continue
-            if busqueda.edad_min and (not persona.get('edad') or pd.isna(persona['edad']) or persona['edad'] < busqueda.edad_min):
-                continue
-            if busqueda.edad_max and (not persona.get('edad') or pd.isna(persona['edad']) or persona['edad'] > busqueda.edad_max):
-                continue
-            if busqueda.ubicacion and (not persona.get('ubicacion') or busqueda.ubicacion.lower() not in persona['ubicacion'].lower()):
-                continue
-            
-            # Obtener intereses
+
+        # Construir lookup: persona_id -> analisis más reciente
+        analisis_by_persona: dict = {}
+        if not storage.analisis_df.empty:
+            adf = storage.analisis_df.copy()
+            if 'start_conversation' in adf.columns and not pd.api.types.is_datetime64_any_dtype(adf['start_conversation']):
+                adf['start_conversation'] = pd.to_datetime(adf['start_conversation'], errors='coerce')
+            # Ordenar descendente para que .first() sea el más reciente
+            adf = adf.sort_values('start_conversation', ascending=False)
+            for rec in adf.to_dict('records'):
+                pid = rec.get('persona_id')
+                if pid and pid not in analisis_by_persona:
+                    analisis_by_persona[pid] = rec
+
+        # Si hay filtro de fecha, limitar a personas con analisis en ese rango
+        persona_ids_en_rango: Optional[set] = None
+        if dt_inicio or dt_fin:
+            analisis_en_rango = AnalisisService.buscar_analisis(
+                fecha_inicio=dt_inicio,
+                fecha_fin=dt_fin,
+                limit=10000
+            )
+            persona_ids_en_rango = {a['persona_id'] for a in analisis_en_rango}
+
+        personas_df = storage.personas_df.copy()
+
+        # Aplicar filtros demográficos directamente sobre el DataFrame
+        if busqueda.genero:
+            personas_df = personas_df[personas_df['genero'] == busqueda.genero]
+        if busqueda.edad_min is not None:
+            personas_df = personas_df[pd.to_numeric(personas_df['edad'], errors='coerce').fillna(-1) >= busqueda.edad_min]
+        if busqueda.edad_max is not None:
+            personas_df = personas_df[pd.to_numeric(personas_df['edad'], errors='coerce').fillna(9999) <= busqueda.edad_max]
+        if busqueda.ubicacion:
+            personas_df = personas_df[personas_df['ubicacion'].fillna('').str.lower().str.contains(busqueda.ubicacion.lower(), na=False)]
+        if persona_ids_en_rango is not None:
+            personas_df = personas_df[personas_df['id'].isin(persona_ids_en_rango)]
+
+        for _, persona in personas_df.iterrows():
+            persona_id = persona['id']
+
+            # Intereses: desde persona_interes_df (fuente de verdad) o desde analisis.categorias
             intereses = []
             try:
-                if analisis.get('categorias'):
+                analisis = analisis_by_persona.get(persona_id)
+                if analisis and analisis.get('categorias'):
                     intereses = json.loads(analisis['categorias'])
                 else:
-                    # Buscar intereses de la persona
                     rel_mask = storage.persona_interes_df['persona_id'] == persona_id
                     if rel_mask.any():
                         interes_ids = storage.persona_interes_df[rel_mask]['interes_id'].values
@@ -1335,15 +1305,33 @@ def buscar_personas(busqueda: BusquedaRequest):
                         intereses = storage.intereses_df[intereses_mask]['categoria'].tolist()
             except:
                 intereses = []
-            
+
+            # Filtro por intereses
             if busqueda.intereses:
-                # Check intersection
                 if not any(i in intereses for i in busqueda.intereses):
                     continue
 
+            analisis = analisis_by_persona.get(persona_id)
+
+            # Fecha de último contacto: mejor fuente disponible
+            fecha_ult = None
+            if analisis:
+                fecha_ult = analisis.get('start_conversation') or analisis.get('fecha_analisis')
+            if not fecha_ult:
+                fecha_ult = persona.get('fecha_ultimo_contacto')
+
+            # Evento
+            evento_id = None
+            evento_nombre = None
+            if analisis and analisis.get('evento_id') and pd.notna(analisis['evento_id']):
+                evento_id = int(analisis['evento_id'])
+                ev = EventoService.obtener_por_id(evento_id)
+                if ev:
+                    evento_nombre = ev['nombre']
+
             resultado.append({
-                "id": persona['id'],
-                "analisis_id": analisis['id'],
+                "id": int(persona['id']),
+                "analisis_id": int(analisis['id']) if analisis else None,
                 "nombre_completo": persona.get('nombre_completo'),
                 "edad": int(persona['edad']) if pd.notna(persona.get('edad')) else None,
                 "genero": persona.get('genero'),
@@ -1354,12 +1342,25 @@ def buscar_personas(busqueda: BusquedaRequest):
                 "facebook_username": persona.get('facebook_username'),
                 "instagram_username": persona.get('instagram_username'),
                 "intereses": intereses,
-                "resumen_conversacion": analisis.get('resumen'),
-                "fecha_primer_contacto": persona.get('fecha_primer_contacto'),
-                "fecha_ultimo_contacto": analisis.get('start_conversation') or analisis.get('fecha_analisis')
+                "resumen_conversacion": analisis.get('resumen') if analisis else None,
+                "fecha_primer_contacto": _safe_date(persona.get('fecha_primer_contacto')),
+                "fecha_ultimo_contacto": _safe_date(fecha_ult),
+                "evento_id": evento_id,
+                "evento_nombre": evento_nombre,
             })
+
+        # Ordenar por fecha_ultimo_contacto descendente
+        resultado.sort(key=lambda x: (x['fecha_ultimo_contacto'] or ''), reverse=True)
+
     else:
-        # Modo SQLAlchemy
+        # Modo SQLAlchemy – obtener análisis filtrados por fecha
+        with get_db() as db:
+            analisis_candidates = AnalisisService.buscar_analisis(
+                db,
+                fecha_inicio=dt_inicio,
+                fecha_fin=dt_fin,
+                limit=1000
+            )
         for analisis in analisis_candidates:
             persona = analisis.persona
             if not persona: continue # Safety check
