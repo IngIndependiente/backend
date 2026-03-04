@@ -13,6 +13,45 @@ import secrets
 import json
 import os
 import sys
+import collections
+import threading
+import io
+
+# ── Log buffer ─────────────────────────────────────────────────────────────
+# Captura todo el output de print() en memoria (últimas 500 líneas) para
+# exponerlo a través de /api/debug/logs sin necesidad de acceder a Railway.
+
+class _TeeStream:
+    """Stream que escribe en el original Y en un buffer circular."""
+    def __init__(self, original, buf: collections.deque):
+        self._orig = original
+        self._buf = buf
+        self._lock = threading.Lock()
+        # acumulador de fragmentos hasta completar una línea
+        self._partial = ""
+
+    def write(self, text: str):
+        self._orig.write(text)
+        with self._lock:
+            self._partial += text
+            while "\n" in self._partial:
+                line, self._partial = self._partial.split("\n", 1)
+                ts = datetime.now().strftime("%H:%M:%S")
+                self._buf.append(f"{ts}  {line}")
+
+    def flush(self):
+        self._orig.flush()
+
+    def fileno(self):
+        return self._orig.fileno()
+
+    def isatty(self):
+        return False
+
+_LOG_BUFFER: collections.deque = collections.deque(maxlen=500)
+sys.stdout = _TeeStream(sys.__stdout__, _LOG_BUFFER)
+sys.stderr = _TeeStream(sys.__stderr__, _LOG_BUFFER)
+# ───────────────────────────────────────────────────────────────────────────
 
 from backend import config
 from backend.database.storage import get_db, init_db, PersonaService, ConversacionService, AnalisisService, EventoService, USE_DATAFRAMES, get_db_session
@@ -1835,6 +1874,13 @@ def obtener_estadisticas():
                 "por_genero": stats_genero,
                 "por_interes": stats_intereses
             }
+
+
+@app.get("/api/debug/logs")
+def debug_logs(n: int = 200):
+    """Devuelve las últimas N líneas del log en memoria."""
+    lines = list(_LOG_BUFFER)[-n:]
+    return {"total": len(_LOG_BUFFER), "lines": lines}
 
 
 @app.get("/api/debug/status")
