@@ -2562,13 +2562,17 @@ async def verify_whatsapp_webhook(request: Request):
     token = params.get("hub.verify_token")
     challenge = params.get("hub.challenge")
 
+    print(f"[WSP-VERIFY] mode={mode!r} token={token!r} challenge={challenge!r}")
+
     if mode and token:
         if mode == "subscribe" and token == config.WHATSAPP_VERIFY_TOKEN:
             print("✅ WHATSAPP_WEBHOOK_VERIFIED")
             return PlainTextResponse(content=challenge, status_code=200)
         else:
+            print(f"❌ [WSP-VERIFY] Token inválido. Recibido: {token!r} | Esperado: {config.WHATSAPP_VERIFY_TOKEN!r}")
             raise HTTPException(status_code=403, detail="WhatsApp verification failed")
-    
+
+    print("[WSP-VERIFY] Solicitud sin mode/token - retornando status ok")
     return {"status": "ok"}
 
 
@@ -2579,17 +2583,22 @@ async def whatsapp_webhook_handler(request: Request, background_tasks: Backgroun
     """
     try:
         body = await request.json()
-        
+        print(f"[WSP-WEBHOOK] Payload recibido: {json.dumps(body)[:500]}")
+
         # Procesar con el cliente de WhatsApp
         data = whatsapp_client.procesar_webhook_whatsapp(body)
-        
+        print(f"[WSP-WEBHOOK] Datos parseados: {data}")
+
         if data and data.get("message"):
             # Es un mensaje entrante
             phone = data.get("phone")
             message = data.get("message")
             message_id = data.get("message_id")
             username = data.get("username")
-            
+            msg_type = data.get("message_type", "?")
+
+            print(f"[WSP-WEBHOOK] 📨 Mensaje entrante | tipo={msg_type} | de={phone} ({username!r}) | id={message_id} | texto={message!r}")
+
             # Procesar en background
             background_tasks.add_task(
                 procesar_mensaje_whatsapp,
@@ -2598,14 +2607,18 @@ async def whatsapp_webhook_handler(request: Request, background_tasks: Backgroun
                 username,
                 message_id
             )
-            
+            print(f"[WSP-WEBHOOK] Tarea en background encolada para {phone}")
             return PlainTextResponse(content="EVENT_RECEIVED", status_code=200)
-        
-        # Si es un cambio de estado (leído, entregado, etc), simplemente aceptar
+
+        if data and data.get("type") == "status":
+            print(f"[WSP-WEBHOOK] 📋 Cambio de estado | msg_id={data.get('message_id')} | status={data.get('status')} | para={data.get('recipient_id')}")
+            return PlainTextResponse(content="EVENT_RECEIVED", status_code=200)
+
+        print(f"[WSP-WEBHOOK] ⚠️ Evento no reconocido o sin mensaje. data={data}")
         return PlainTextResponse(content="EVENT_RECEIVED", status_code=200)
-            
+
     except Exception as e:
-        print(f"❌ Error en webhook WhatsApp: {e}")
+        print(f"❌ [WSP-WEBHOOK] Error procesando payload: {e}")
         import traceback
         traceback.print_exc()
         # Siempre devolver 200 para evitar reintentos
@@ -2616,6 +2629,8 @@ def procesar_mensaje_whatsapp(phone: str, texto: str, username: str, message_id:
     """
     Procesar mensaje de WhatsApp en background con respuestas automáticas.
     """
+    print(f"[WSP-PROC] ▶ Iniciando procesamiento | phone={phone} | username={username!r} | msg_id={message_id} | texto={texto!r}")
+    print(f"[WSP-PROC] Modo almacenamiento: {'DataFrames (local)' if USE_DATAFRAMES else 'SQLAlchemy (cloud)'}")
     try:
         # Detectar si es un click en botón de interés
         interes_map = {
@@ -2630,12 +2645,15 @@ def procesar_mensaje_whatsapp(phone: str, texto: str, username: str, message_id:
         }
         
         interes_seleccionado = interes_map.get(texto)
-        
+        print(f"[WSP-PROC] Interés detectado por botón: {interes_seleccionado!r}")
+
         # Buscar o crear persona por teléfono
         if USE_DATAFRAMES:
+            print(f"[WSP-PROC] Buscando persona por teléfono (DataFrames): {phone}")
             persona = PersonaService.obtener_por_telefono(phone)
-            
+
             if not persona:
+                print(f"[WSP-PROC] Persona no encontrada, creando nueva...")
                 # Crear nueva persona
                 datos = {"telefono": phone}
                 if username:
@@ -2646,7 +2664,8 @@ def procesar_mensaje_whatsapp(phone: str, texto: str, username: str, message_id:
                 )
             
             persona_id = persona['id']
-            
+            print(f"[WSP-PROC] Persona encontrada/creada | id={persona_id}")
+
             # Si es click en botón, actualizar interés directamente
             if interes_seleccionado:
                 PersonaService.crear_o_actualizar_persona(
@@ -2674,13 +2693,16 @@ def procesar_mensaje_whatsapp(phone: str, texto: str, username: str, message_id:
             # Obtener historial para procesamiento normal
             historial = ConversacionService.obtener_historial_por_persona(persona_id, limit=10)
             historial_mensajes = [c['mensaje'] for c in historial]
-            
+            print(f"[WSP-PROC] Historial cargado: {len(historial_mensajes)} mensajes previos")
+
         else:
             # Modo SQLAlchemy
+            print(f"[WSP-PROC] Buscando persona por teléfono (SQLAlchemy): {phone}")
             with get_db() as db:
                 persona = db.query(Persona).filter(Persona.telefono == phone).first()
-                
+
                 if not persona:
+                    print(f"[WSP-PROC] Persona no encontrada, creando nueva...")
                     # Crear nueva persona
                     datos = {"telefono": phone}
                     if username:
@@ -2692,7 +2714,8 @@ def procesar_mensaje_whatsapp(phone: str, texto: str, username: str, message_id:
                     )
                 
                 persona_id = persona.id
-                
+                print(f"[WSP-PROC] Persona encontrada/creada | id={persona_id}")
+
                 # Si es click en botón, actualizar interés directamente
                 if interes_seleccionado:
                     PersonaService.crear_o_actualizar_persona(
@@ -2722,101 +2745,108 @@ def procesar_mensaje_whatsapp(phone: str, texto: str, username: str, message_id:
                 # Obtener historial para procesamiento normal
                 conversaciones = ConversacionService.obtener_historial(db, persona_id, limit=10)
                 historial_mensajes = [c.mensaje for c in conversaciones]
-        
+                print(f"[WSP-PROC] Historial cargado: {len(historial_mensajes)} mensajes previos")
+
         # Procesar con Agente
+        print(f"[WSP-PROC] Enviando al agente | agente_disponible={AGENTE_DISPONIBLE}")
         resultado = procesar_conversacion(
             mensaje=texto,
             plataforma="whatsapp",
             persona_id=persona_id,
             historial=historial_mensajes
         )
-        
-        # Guardar resultados
-        if resultado.get("datos_extraidos"):
+        print(f"[WSP-PROC] Resultado del agente: {resultado}")
+
+        # Extraer datos del agente (puede ser {} si el agente no está disponible)
+        datos_extraidos = (resultado.get("datos_extraidos") if resultado else None) or {}
+
+        print(f"[WSP-PROC] Datos extraídos por agente: {datos_extraidos}")
+
+        # Actualizar persona con datos extraídos (solo si el agente devolvió algo)
+        if datos_extraidos:
+            print(f"[WSP-PROC] Actualizando persona con datos extraídos...")
             if USE_DATAFRAMES:
-                # Actualizar persona
                 PersonaService.crear_o_actualizar_persona(
-                    datos=resultado["datos_extraidos"],
+                    datos=datos_extraidos,
                     telefono=phone
                 )
-                
-                # Guardar conversación
+            else:
+                with get_db() as db:
+                    PersonaService.crear_o_actualizar_persona(
+                        db,
+                        datos=datos_extraidos,
+                        telefono=phone
+                    )
+
+        # Guardar conversación SIEMPRE (independiente del agente)
+        print(f"[WSP-PROC] Guardando conversación en BD...")
+        if USE_DATAFRAMES:
+            ConversacionService.guardar_conversacion(
+                persona_id=persona_id,
+                mensaje=texto,
+                plataforma="whatsapp",
+                es_enviado=False,
+                datos_extraidos=datos_extraidos
+            )
+        else:
+            with get_db() as db:
                 ConversacionService.guardar_conversacion(
+                    db,
                     persona_id=persona_id,
                     mensaje=texto,
                     plataforma="whatsapp",
                     es_enviado=False,
-                    datos_extraidos=resultado["datos_extraidos"]
+                    datos_extraidos=datos_extraidos
                 )
+
+        # RESPUESTA AUTOMÁTICA CON BOTONES INTERACTIVOS (siempre se envía)
+        nombre = datos_extraidos.get("nombre_completo", "")
+        intereses = datos_extraidos.get("intereses", [])
+        es_primer_mensaje = not nombre or len(historial_mensajes) == 0
+        print(f"[WSP-PROC] Preparando respuesta | nombre={nombre!r} | intereses={intereses} | primer_mensaje={es_primer_mensaje}")
+
+        if es_primer_mensaje or not intereses:
+            respuesta_texto = f"¡Hola{' ' + nombre if nombre else ''}! Gracias por contactarnos. ¿Qué tema te interesa más?"
+
+            # WhatsApp solo soporta hasta 3 botones
+            botones = [
+                {"id": "SEGURIDAD", "title": "🔒 Seguridad"},
+                {"id": "EDUCACION", "title": "🎓 Educación"},
+                {"id": "SALUD", "title": "🏥 Salud"}
+            ]
+
+            print(f"[WSP-PROC] Enviando botones interactivos a {phone}...")
+            whatsapp_client.enviar_mensaje_con_botones(
+                phone,
+                respuesta_texto,
+                botones
+            )
+        else:
+            if nombre:
+                respuesta = f"Gracias {nombre} por compartir tu preocupación"
             else:
-                with get_db() as db:
-                    # Actualizar persona
-                    PersonaService.crear_o_actualizar_persona(
-                        db,
-                        datos=resultado["datos_extraidos"],
-                        telefono=phone
-                    )
-                    
-                    # Buscar persona actualizada
-                    persona = db.query(Persona).filter(Persona.telefono == phone).first()
-                    
-                    # Guardar conversación
-                    ConversacionService.guardar_conversacion(
-                        db,
-                        persona_id=persona.id,
-                        mensaje=texto,
-                        plataforma="whatsapp",
-                        es_enviado=False,
-                        datos_extraidos=resultado["datos_extraidos"]
-                    )
-            
-            # RESPUESTA AUTOMÁTICA CON BOTONES INTERACTIVOS
-            nombre = resultado["datos_extraidos"].get("nombre_completo", "")
-            intereses = resultado["datos_extraidos"].get("intereses", [])
-            
-            es_primer_mensaje = not nombre or len(historial_mensajes) == 0
-            
-            # Si es primer mensaje, enviar botones con temas
-            if es_primer_mensaje or not intereses:
-                respuesta_texto = f"¡Hola{' ' + nombre if nombre else ''}! Gracias por contactarnos. ¿Qué tema te interesa más?"
-                
-                # WhatsApp solo soporta hasta 3 botones
-                botones = [
-                    {"id": "SEGURIDAD", "title": "🔒 Seguridad"},
-                    {"id": "EDUCACION", "title": "🎓 Educación"},
-                    {"id": "SALUD", "title": "🏥 Salud"}
-                ]
-                
-                whatsapp_client.enviar_mensaje_con_botones(
-                    phone,
-                    respuesta_texto,
-                    botones
-                )
-            else:
-                # Respuesta de confirmación simple
-                if nombre:
-                    respuesta = f"Gracias {nombre} por compartir tu preocupación"
-                else:
-                    respuesta = "Gracias por compartir tu preocupación"
-                
-                if intereses:
-                    temas = ", ".join(intereses)
-                    respuesta += f" sobre {temas}"
-                
-                respuesta += ". Un miembro de nuestro equipo revisará tu mensaje pronto."
-                
-                whatsapp_client.enviar_mensaje(phone, respuesta)
-            
-            print(f"✅ Mensaje WhatsApp procesado y respondido a {phone}")
-            
-            # Marcar mensaje como leído
-            try:
-                whatsapp_client.marcar_como_leido(message_id)
-            except:
-                pass  # No es crítico si falla
-            
+                respuesta = "Gracias por compartir tu preocupación"
+
+            if intereses:
+                temas = ", ".join(intereses)
+                respuesta += f" sobre {temas}"
+
+            respuesta += ". Un miembro de nuestro equipo revisará tu mensaje pronto."
+
+            print(f"[WSP-PROC] Enviando respuesta de texto a {phone}...")
+            whatsapp_client.enviar_mensaje(phone, respuesta)
+
+        print(f"✅ [WSP-PROC] Mensaje procesado y respondido a {phone}")
+
+        # Marcar mensaje como leído
+        try:
+            whatsapp_client.marcar_como_leido(message_id)
+            print(f"[WSP-PROC] ✓ Mensaje {message_id} marcado como leído")
+        except Exception as e_read:
+            print(f"[WSP-PROC] ⚠️ No se pudo marcar como leído: {e_read}")
+
     except Exception as e:
-        print(f"❌ Error procesando mensaje WhatsApp: {e}")
+        print(f"❌ [WSP-PROC] Error procesando mensaje de {phone}: {e}")
         import traceback
         traceback.print_exc()
 
