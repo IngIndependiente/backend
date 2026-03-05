@@ -16,7 +16,8 @@ class PersonaService:
         db: Session,
         datos: Dict[str, Any],
         facebook_id: str = None,
-        instagram_id: str = None
+        instagram_id: str = None,
+        telefono: str = None
     ) -> Persona:
         """
         Crear o actualizar una persona con los datos extraídos.
@@ -26,6 +27,7 @@ class PersonaService:
             datos: Diccionario con datos extraídos
             facebook_id: ID de Facebook
             instagram_id: ID de Instagram
+            telefono: Número de teléfono (WhatsApp)
             
         Returns:
             Persona creada o actualizada
@@ -37,12 +39,15 @@ class PersonaService:
             persona = db.query(Persona).filter(Persona.facebook_id == facebook_id).first()
         elif instagram_id:
             persona = db.query(Persona).filter(Persona.instagram_id == instagram_id).first()
+        elif telefono:
+            persona = db.query(Persona).filter(Persona.telefono == telefono).first()
         
         # Si no existe, crear nueva
         if not persona:
             persona = Persona(
                 facebook_id=facebook_id,
                 instagram_id=instagram_id,
+                telefono=telefono,
                 fecha_primer_contacto=datetime.utcnow()
             )
             db.add(persona)
