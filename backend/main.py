@@ -9,6 +9,13 @@ import pandas as pd
 from datetime import datetime
 import json
 import secrets
+import pytz
+
+_TZ_CL = pytz.timezone('America/Santiago')
+
+def _ahora_cl() -> datetime:
+    """Datetime actual en zona horaria de Santiago de Chile (naive, para guardar en BD)."""
+    return datetime.now(_TZ_CL).replace(tzinfo=None)
 
 import json
 import os
@@ -2814,8 +2821,12 @@ def procesar_mensaje_whatsapp(phone: str, texto: str, username: str, message_id:
                 print(f"[WSP-PROC] ⚠️ Error actualizando persona: {e_update}")
 
         # Guardar conversación SIEMPRE — bloque aislado para que nunca se pierda
-        print(f"[WSP-PROC] Guardando conversación en BD...")
+        print(f"[WSP-PROC] Guardando conversación y análisis en BD...")
         try:
+            intereses_extraidos = datos_extraidos.get("intereses", [])
+            resumen = datos_extraidos.get("resumen_conversacional") or f"WhatsApp: {texto[:80]}"
+            ahora = _ahora_cl()
+
             if USE_DATAFRAMES:
                 ConversacionService.guardar_conversacion(
                     persona_id=persona_id,
@@ -2823,6 +2834,14 @@ def procesar_mensaje_whatsapp(phone: str, texto: str, username: str, message_id:
                     plataforma="whatsapp",
                     es_enviado=False,
                     datos_extraidos=datos_extraidos
+                )
+                # Crear análisis para que aparezca en el dashboard
+                AnalisisService.crear_analisis(
+                    persona_id=persona_id,
+                    resumen=resumen,
+                    contenido_completo=texto,
+                    categorias=intereses_extraidos,
+                    start_conversation=ahora
                 )
             else:
                 with get_db() as db:
@@ -2834,7 +2853,16 @@ def procesar_mensaje_whatsapp(phone: str, texto: str, username: str, message_id:
                         es_enviado=False,
                         datos_extraidos=datos_extraidos
                     )
-            print(f"[WSP-PROC] ✓ Conversación guardada en BD para persona_id={persona_id}")
+                    # Crear/actualizar análisis para que aparezca en el dashboard
+                    AnalisisService.crear_analisis(
+                        db,
+                        persona_id=persona_id,
+                        resumen=resumen,
+                        contenido_completo=texto,
+                        categorias=intereses_extraidos,
+                        start_conversation=ahora
+                    )
+            print(f"[WSP-PROC] ✓ Conversación y análisis guardados para persona_id={persona_id}")
         except Exception as e_save:
             print(f"[WSP-PROC] ❌ FALLO al guardar conversación en BD: {e_save}")
             import traceback
