@@ -2596,8 +2596,9 @@ async def whatsapp_webhook_handler(request: Request, background_tasks: Backgroun
             message_id = data.get("message_id")
             username = data.get("username")
             msg_type = data.get("message_type", "?")
+            phone_number_id = data.get("phone_number_id", "")
 
-            print(f"[WSP-WEBHOOK] 📨 Mensaje entrante | tipo={msg_type} | de={phone} ({username!r}) | id={message_id} | texto={message!r}")
+            print(f"[WSP-WEBHOOK] 📨 Mensaje entrante | tipo={msg_type} | de={phone} ({username!r}) | phone_number_id={phone_number_id} | id={message_id} | texto={message!r}")
 
             # Procesar en background
             background_tasks.add_task(
@@ -2605,7 +2606,8 @@ async def whatsapp_webhook_handler(request: Request, background_tasks: Backgroun
                 phone,
                 message,
                 username,
-                message_id
+                message_id,
+                phone_number_id
             )
             print(f"[WSP-WEBHOOK] Tarea en background encolada para {phone}")
             return PlainTextResponse(content="EVENT_RECEIVED", status_code=200)
@@ -2625,12 +2627,35 @@ async def whatsapp_webhook_handler(request: Request, background_tasks: Backgroun
         return PlainTextResponse(content="EVENT_RECEIVED", status_code=200)
 
 
-def procesar_mensaje_whatsapp(phone: str, texto: str, username: str, message_id: str):
+def procesar_mensaje_whatsapp(phone: str, texto: str, username: str, message_id: str, phone_number_id: str = ""):
     """
     Procesar mensaje de WhatsApp en background con respuestas automáticas.
     """
     print(f"[WSP-PROC] ▶ Iniciando procesamiento | phone={phone} | username={username!r} | msg_id={message_id} | texto={texto!r}")
     print(f"[WSP-PROC] Modo almacenamiento: {'DataFrames (local)' if USE_DATAFRAMES else 'SQLAlchemy (cloud)'}")
+
+    # Resolver cliente WhatsApp con las credenciales correctas del candidato
+    # phone_number_id viene del metadata del webhook (siempre es el del candidato)
+    cliente_wsp = whatsapp_client  # fallback al global
+    if phone_number_id:
+        try:
+            candidato = CandidatoService.obtener_candidato_por_whatsapp_phone_id(phone_number_id)
+            if candidato:
+                from backend.integrations.whatsapp_api import WhatsAppClient
+                access_token = candidato.get('whatsapp_access_token') or candidato.get('access_token') or whatsapp_client.access_token
+                cliente_wsp = WhatsAppClient(
+                    phone_number_id=candidato['whatsapp_phone_number_id'],
+                    access_token=access_token,
+                    business_account_id=candidato.get('whatsapp_business_account_id')
+                )
+                print(f"[WSP-PROC] Cliente WhatsApp: candidato '{candidato.get('nombre')}' | phone_number_id={phone_number_id}")
+            else:
+                print(f"[WSP-PROC] ⚠️ No se encontró candidato para phone_number_id={phone_number_id}, usando cliente global")
+        except Exception as e_cand:
+            print(f"[WSP-PROC] ⚠️ Error buscando candidato: {e_cand}, usando cliente global")
+    else:
+        print(f"[WSP-PROC] ⚠️ phone_number_id no viene en el webhook, usando cliente global")
+
     try:
         # Detectar si es un click en botón de interés
         interes_map = {
@@ -2675,7 +2700,7 @@ def procesar_mensaje_whatsapp(phone: str, texto: str, username: str, message_id:
                 
                 # Enviar respuesta de confirmación
                 respuesta = f"Perfecto, hemos registrado tu interés en {interes_seleccionado}. ¿Hay algo específico que te preocupe sobre este tema?"
-                whatsapp_client.enviar_mensaje(phone, respuesta)
+                cliente_wsp.enviar_mensaje(phone, respuesta)
                 
                 # Guardar conversación
                 ConversacionService.guardar_conversacion(
@@ -2686,7 +2711,7 @@ def procesar_mensaje_whatsapp(phone: str, texto: str, username: str, message_id:
                     datos_extraidos={"intereses": [interes_seleccionado]}
                 )
                 
-                whatsapp_client.marcar_como_leido(message_id)
+                cliente_wsp.marcar_como_leido(message_id)
                 print(f"✅ Interés {interes_seleccionado} registrado para {phone}")
                 return
             
@@ -2726,7 +2751,7 @@ def procesar_mensaje_whatsapp(phone: str, texto: str, username: str, message_id:
                     
                     # Enviar respuesta de confirmación
                     respuesta = f"Perfecto, hemos registrado tu interés en {interes_seleccionado}. ¿Hay algo específico que te preocupe sobre este tema?"
-                    whatsapp_client.enviar_mensaje(phone, respuesta)
+                    cliente_wsp.enviar_mensaje(phone, respuesta)
                     
                     # Guardar conversación
                     ConversacionService.guardar_conversacion(
@@ -2738,7 +2763,7 @@ def procesar_mensaje_whatsapp(phone: str, texto: str, username: str, message_id:
                         datos_extraidos={"intereses": [interes_seleccionado]}
                     )
                     
-                    whatsapp_client.marcar_como_leido(message_id)
+                    cliente_wsp.marcar_como_leido(message_id)
                     print(f"✅ Interés {interes_seleccionado} registrado para {phone}")
                     return
                 
@@ -2759,94 +2784,108 @@ def procesar_mensaje_whatsapp(phone: str, texto: str, username: str, message_id:
 
         # Extraer datos del agente (puede ser {} si el agente no está disponible)
         datos_extraidos = (resultado.get("datos_extraidos") if resultado else None) or {}
+        error_agente = resultado.get("error") if resultado else None
 
-        print(f"[WSP-PROC] Datos extraídos por agente: {datos_extraidos}")
+        if error_agente:
+            if "RESOURCE_EXHAUSTED" in str(error_agente) or "429" in str(error_agente):
+                print(f"[WSP-PROC] ⚠️ Quota LLM agotada (429) — conversación se guardará sin análisis. Considera usar gemini-1.5-flash o agregar billing en Google AI Studio.")
+            else:
+                print(f"[WSP-PROC] ⚠️ Error del agente: {error_agente}")
+        else:
+            print(f"[WSP-PROC] Datos extraídos por agente: {datos_extraidos}")
 
         # Actualizar persona con datos extraídos (solo si el agente devolvió algo)
         if datos_extraidos:
             print(f"[WSP-PROC] Actualizando persona con datos extraídos...")
-            if USE_DATAFRAMES:
-                PersonaService.crear_o_actualizar_persona(
-                    datos=datos_extraidos,
-                    telefono=phone
-                )
-            else:
-                with get_db() as db:
+            try:
+                if USE_DATAFRAMES:
                     PersonaService.crear_o_actualizar_persona(
-                        db,
                         datos=datos_extraidos,
                         telefono=phone
                     )
+                else:
+                    with get_db() as db:
+                        PersonaService.crear_o_actualizar_persona(
+                            db,
+                            datos=datos_extraidos,
+                            telefono=phone
+                        )
+            except Exception as e_update:
+                print(f"[WSP-PROC] ⚠️ Error actualizando persona: {e_update}")
 
-        # Guardar conversación SIEMPRE (independiente del agente)
+        # Guardar conversación SIEMPRE — bloque aislado para que nunca se pierda
         print(f"[WSP-PROC] Guardando conversación en BD...")
-        if USE_DATAFRAMES:
-            ConversacionService.guardar_conversacion(
-                persona_id=persona_id,
-                mensaje=texto,
-                plataforma="whatsapp",
-                es_enviado=False,
-                datos_extraidos=datos_extraidos
-            )
-        else:
-            with get_db() as db:
+        try:
+            if USE_DATAFRAMES:
                 ConversacionService.guardar_conversacion(
-                    db,
                     persona_id=persona_id,
                     mensaje=texto,
                     plataforma="whatsapp",
                     es_enviado=False,
                     datos_extraidos=datos_extraidos
                 )
+            else:
+                with get_db() as db:
+                    ConversacionService.guardar_conversacion(
+                        db,
+                        persona_id=persona_id,
+                        mensaje=texto,
+                        plataforma="whatsapp",
+                        es_enviado=False,
+                        datos_extraidos=datos_extraidos
+                    )
+            print(f"[WSP-PROC] ✓ Conversación guardada en BD para persona_id={persona_id}")
+        except Exception as e_save:
+            print(f"[WSP-PROC] ❌ FALLO al guardar conversación en BD: {e_save}")
+            import traceback
+            traceback.print_exc()
 
-        # RESPUESTA AUTOMÁTICA CON BOTONES INTERACTIVOS (siempre se envía)
+        # RESPUESTA AUTOMÁTICA — bloque aislado para que un fallo no afecte el guardado
         nombre = datos_extraidos.get("nombre_completo", "")
         intereses = datos_extraidos.get("intereses", [])
         es_primer_mensaje = not nombre or len(historial_mensajes) == 0
         print(f"[WSP-PROC] Preparando respuesta | nombre={nombre!r} | intereses={intereses} | primer_mensaje={es_primer_mensaje}")
 
-        if es_primer_mensaje or not intereses:
-            respuesta_texto = f"¡Hola{' ' + nombre if nombre else ''}! Gracias por contactarnos. ¿Qué tema te interesa más?"
-
-            # WhatsApp solo soporta hasta 3 botones
-            botones = [
-                {"id": "SEGURIDAD", "title": "🔒 Seguridad"},
-                {"id": "EDUCACION", "title": "🎓 Educación"},
-                {"id": "SALUD", "title": "🏥 Salud"}
-            ]
-
-            print(f"[WSP-PROC] Enviando botones interactivos a {phone}...")
-            whatsapp_client.enviar_mensaje_con_botones(
-                phone,
-                respuesta_texto,
-                botones
-            )
+        # Validar que phone_number_id esté configurado antes de intentar enviar
+        if not cliente_wsp.phone_number_id:
+            print(f"[WSP-PROC] ❌ phone_number_id no disponible en cliente_wsp — no se puede enviar respuesta. Configura WhatsApp desde el panel del candidato.")
         else:
-            if nombre:
-                respuesta = f"Gracias {nombre} por compartir tu preocupación"
-            else:
-                respuesta = "Gracias por compartir tu preocupación"
+            try:
+                if es_primer_mensaje or not intereses:
+                    respuesta_texto = f"¡Hola{' ' + nombre if nombre else ''}! Gracias por contactarnos. ¿Qué tema te interesa más?"
+                    botones = [
+                        {"id": "SEGURIDAD", "title": "🔒 Seguridad"},
+                        {"id": "EDUCACION", "title": "🎓 Educación"},
+                        {"id": "SALUD", "title": "🏥 Salud"}
+                    ]
+                    print(f"[WSP-PROC] Enviando botones interactivos a {phone}...")
+                    cliente_wsp.enviar_mensaje_con_botones(phone, respuesta_texto, botones)
+                else:
+                    if nombre:
+                        respuesta = f"Gracias {nombre} por compartir tu preocupación"
+                    else:
+                        respuesta = "Gracias por compartir tu preocupación"
+                    if intereses:
+                        respuesta += f" sobre {', '.join(intereses)}"
+                    respuesta += ". Un miembro de nuestro equipo revisará tu mensaje pronto."
+                    print(f"[WSP-PROC] Enviando respuesta de texto a {phone}...")
+                    cliente_wsp.enviar_mensaje(phone, respuesta)
 
-            if intereses:
-                temas = ", ".join(intereses)
-                respuesta += f" sobre {temas}"
-
-            respuesta += ". Un miembro de nuestro equipo revisará tu mensaje pronto."
-
-            print(f"[WSP-PROC] Enviando respuesta de texto a {phone}...")
-            whatsapp_client.enviar_mensaje(phone, respuesta)
-
-        print(f"✅ [WSP-PROC] Mensaje procesado y respondido a {phone}")
+                print(f"✅ [WSP-PROC] Respuesta enviada a {phone}")
+            except Exception as e_send:
+                print(f"[WSP-PROC] ❌ Error enviando respuesta a {phone}: {e_send}")
 
         # Marcar mensaje como leído
         try:
-            whatsapp_client.marcar_como_leido(message_id)
+            cliente_wsp.marcar_como_leido(message_id)
             print(f"[WSP-PROC] ✓ Mensaje {message_id} marcado como leído")
         except Exception as e_read:
             print(f"[WSP-PROC] ⚠️ No se pudo marcar como leído: {e_read}")
 
+        print(f"✅ [WSP-PROC] Procesamiento completo para {phone}")
+
     except Exception as e:
-        print(f"❌ [WSP-PROC] Error procesando mensaje de {phone}: {e}")
+        print(f"❌ [WSP-PROC] Error inesperado procesando mensaje de {phone}: {e}")
         import traceback
         traceback.print_exc()
 

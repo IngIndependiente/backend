@@ -20,6 +20,12 @@ class WhatsAppClient:
         self.business_account_id = business_account_id or config.WHATSAPP_BUSINESS_ACCOUNT_ID
         self.access_token = access_token or config.META_ACCESS_TOKEN
         self.base_url = "https://graph.facebook.com/v18.0"
+
+        # Advertencias de configuración al inicializar
+        if not self.phone_number_id:
+            print("⚠️ [WSP] WHATSAPP_PHONE_NUMBER_ID no configurado — los mensajes salientes fallarán. Agrégalo en Railway → Variables.")
+        if not self.access_token:
+            print("⚠️ [WSP] META_ACCESS_TOKEN no configurado — todas las llamadas a la API fallarán.")
     
     def enviar_mensaje(self, recipient_phone: str, message: str) -> bool:
         """
@@ -136,7 +142,8 @@ class WhatsAppClient:
                 # Metadata del negocio
                 metadata = value.get("metadata", {})
                 display_phone = metadata.get("display_phone_number", "")
-                
+                phone_number_id = metadata.get("phone_number_id", "")
+
                 return {
                     "phone": phone,
                     "message": text,
@@ -144,6 +151,7 @@ class WhatsAppClient:
                     "timestamp": timestamp,
                     "username": username,
                     "display_phone": display_phone,
+                    "phone_number_id": phone_number_id,
                     "message_type": message_type
                 }
             

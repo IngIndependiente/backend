@@ -186,8 +186,30 @@ class CandidatoService:
                 return None
     
     @staticmethod
+    def obtener_candidato_por_whatsapp_phone_id(phone_number_id: str) -> Optional[Dict[str, Any]]:
+        """Obtener candidato por WhatsApp Phone Number ID."""
+        if config.ENV == "local":
+            storage = get_storage()
+            mask = storage.candidatos_df['whatsapp_phone_number_id'] == phone_number_id
+            if mask.any():
+                return storage.candidatos_df[mask].iloc[0].to_dict()
+            return None
+        else:
+            with get_db() as db:
+                candidato = db.query(Candidato).filter(Candidato.whatsapp_phone_number_id == phone_number_id).first()
+                if candidato:
+                    return {
+                        'id': candidato.id,
+                        'nombre': candidato.nombre,
+                        'whatsapp_phone_number_id': candidato.whatsapp_phone_number_id,
+                        'whatsapp_business_account_id': candidato.whatsapp_business_account_id,
+                        'whatsapp_access_token': getattr(candidato, 'whatsapp_access_token', None),
+                        'access_token': candidato.facebook_page_access_token,
+                    }
+                return None
+
+    @staticmethod
     def obtener_candidato_por_page_id(facebook_page_id: str) -> Optional[Dict[str, Any]]:
-        """Obtener candidato por Facebook Page ID."""
         if config.ENV == "local":
             storage = get_storage()
             mask = storage.candidatos_df['facebook_page_id'] == facebook_page_id
