@@ -1107,19 +1107,18 @@ def listar_personas(
         except:
             pass
 
-    # Obtenemos los análisis más recientes
-    analisis_list = AnalisisService.buscar_analisis(
-        fecha_inicio=dt_inicio,
-        fecha_fin=dt_fin,
-        limit=limit
-    )
-    
     resultado = []
     
     if USE_DATAFRAMES:
         # Modo DataFrames
         from backend.database.dataframe_storage import get_storage
         storage = get_storage()
+        
+        analisis_list = AnalisisService.buscar_analisis(
+            fecha_inicio=dt_inicio,
+            fecha_fin=dt_fin,
+            limit=limit
+        )
         
         for analisis in analisis_list:
             persona_id = analisis['persona_id']
@@ -1170,37 +1169,44 @@ def listar_personas(
                 "evento_nombre": evento_nombre
             })
     else:
-        # Modo SQLAlchemy
-        for analisis in analisis_list:
-            persona = analisis.persona
-            intereses = []
-            try:
-                if analisis.categorias:
-                     intereses = json.loads(analisis.categorias)
-                elif persona.intereses:
-                     intereses = [i.categoria for i in persona.intereses]
-            except:
+        # Modo SQLAlchemy — necesita sesión de BD
+        with get_db() as db:
+            analisis_list = AnalisisService.buscar_analisis(
+                db,
+                fecha_inicio=dt_inicio,
+                fecha_fin=dt_fin,
+                limit=limit
+            )
+            for analisis in analisis_list:
+                persona = analisis.persona
                 intereses = []
+                try:
+                    if analisis.categorias:
+                         intereses = json.loads(analisis.categorias)
+                    elif persona.intereses:
+                         intereses = [i.categoria for i in persona.intereses]
+                except:
+                    intereses = []
 
-            resultado.append({
-                "id": persona.id,
-                "analisis_id": analisis.id,
-                "nombre_completo": persona.nombre_completo,
-                "edad": persona.edad,
-                "genero": persona.genero,
-                "telefono": persona.telefono,
-                "email": persona.email,
-                "ocupacion": persona.ocupacion,
-                "ubicacion": persona.ubicacion,
-                "facebook_username": persona.facebook_username,
-                "instagram_username": persona.instagram_username,
-                "intereses": intereses,
-                "resumen_conversacion": analisis.resumen,
-                "fecha_primer_contacto": persona.fecha_primer_contacto,
-                "fecha_ultimo_contacto": analisis.start_conversation or analisis.fecha_analisis,
-                "evento_id": analisis.evento_id,
-                "evento_nombre": analisis.evento.nombre if analisis.evento else None
-            })
+                resultado.append({
+                    "id": persona.id,
+                    "analisis_id": analisis.id,
+                    "nombre_completo": persona.nombre_completo,
+                    "edad": persona.edad,
+                    "genero": persona.genero,
+                    "telefono": persona.telefono,
+                    "email": persona.email,
+                    "ocupacion": persona.ocupacion,
+                    "ubicacion": persona.ubicacion,
+                    "facebook_username": persona.facebook_username,
+                    "instagram_username": persona.instagram_username,
+                    "intereses": intereses,
+                    "resumen_conversacion": analisis.resumen,
+                    "fecha_primer_contacto": persona.fecha_primer_contacto,
+                    "fecha_ultimo_contacto": analisis.start_conversation or analisis.fecha_analisis,
+                    "evento_id": analisis.evento_id,
+                    "evento_nombre": analisis.evento.nombre if analisis.evento else None
+                })
     
     return resultado
 

@@ -61,33 +61,33 @@ else:
         @staticmethod
         def obtener_todos():
             from backend.database.models import Evento
-            from backend.database import get_db_session
-            with get_db_session() as db:
+            from backend.database import get_db
+            with get_db() as db:
                 eventos = db.query(Evento).order_by(Evento.nombre).all()
                 return [{'id': e.id, 'nombre': e.nombre, 'descripcion': e.descripcion} for e in eventos]
         
         @staticmethod
         def obtener_por_id(evento_id: int):
             from backend.database.models import Evento
-            from backend.database import get_db_session
-            with get_db_session() as db:
+            from backend.database import get_db
+            with get_db() as db:
                 evento = db.query(Evento).filter(Evento.id == evento_id).first()
                 return {'id': evento.id, 'nombre': evento.nombre, 'descripcion': evento.descripcion} if evento else None
         
         @staticmethod
         def obtener_por_nombre(nombre: str):
             from backend.database.models import Evento
-            from backend.database import get_db_session
-            with get_db_session() as db:
+            from backend.database import get_db
+            with get_db() as db:
                 evento = db.query(Evento).filter(Evento.nombre == nombre).first()
                 return {'id': evento.id, 'nombre': evento.nombre, 'descripcion': evento.descripcion} if evento else None
         
         @staticmethod
         def crear_evento(nombre: str, descripcion: str = None):
             from backend.database.models import Evento
-            from backend.database import get_db_session
+            from backend.database import get_db
             from datetime import datetime
-            with get_db_session() as db:
+            with get_db() as db:
                 evento = Evento(nombre=nombre, descripcion=descripcion or f'Evento: {nombre}', fecha_creacion=datetime.now())
                 db.add(evento)
                 db.commit()
