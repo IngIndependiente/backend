@@ -11,6 +11,7 @@ google-auth>=2.36.0
 # Base de datos
 sqlalchemy>=2.0.36
 alembic==1.13.1
+psycopg2-binary>=2.9.9  # PostgreSQL adapter para SQLAlchemy
 
 # Backend API
 fastapi==0.109.0

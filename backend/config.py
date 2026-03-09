@@ -73,12 +73,30 @@ WHATSAPP_BUSINESS_ACCOUNT_ID = os.getenv("WHATSAPP_BUSINESS_ACCOUNT_ID")
 WHATSAPP_VERIFY_TOKEN = os.getenv("WHATSAPP_VERIFY_TOKEN", "whatsapp_verify_token_secreto")
 
 # Base de datos
-DATABASE_PATH = BASE_DIR / "agente_politico.db"
-# Usar ruta absoluta para evitar problemas si se ejecuta desde subdirectorios
-if str(DATABASE_PATH).startswith("\\\\"):
-   # Fix para windows UNC paths si fuera necesario, aunque pathlib suele manejarlo
-   pass
-DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:///{DATABASE_PATH.as_posix()}")
+# En producción: usar PostgreSQL (DATABASE_URL debe estar en variables de entorno)
+# En local: usar SQLite
+if IS_WEB_ENV:
+    # Producción: PostgreSQL obligatorio
+    DATABASE_URL = os.getenv("DATABASE_URL")
+    if not DATABASE_URL:
+        raise ValueError(
+            "❌ ERROR: DATABASE_URL no configurada en producción.\n"
+            "En Railway, configura: postgresql://user:pass@host/dbname\n"
+            "O usa Railway PostgreSQL plugin que auto-configura DATABASE_URL"
+        )
+    # Railway entrega postgres:// pero SQLAlchemy requiere postgresql://
+    if DATABASE_URL.startswith("postgres://"):
+        DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+    print(f"✅ Base de datos: PostgreSQL (producción)")
+else:
+    # Local: SQLite
+    DATABASE_PATH = BASE_DIR / "agente_politico.db"
+    # Usar ruta absoluta para evitar problemas si se ejecuta desde subdirectorios
+    if str(DATABASE_PATH).startswith("\\\\"):
+       # Fix para windows UNC paths si fuera necesario, aunque pathlib suele manejarlo
+       pass
+    DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:///{DATABASE_PATH.as_posix()}")
+    print(f"✅ Base de datos: SQLite (local) - {DATABASE_PATH}")
 
 # Servidor
 if IS_WEB_ENV:

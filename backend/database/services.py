@@ -1,7 +1,7 @@
 """Servicios de base de datos para gestión de personas e información."""
 from sqlalchemy.orm import Session
 from sqlalchemy import and_, or_
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Union
 from datetime import datetime, date
 import json
 
@@ -262,8 +262,8 @@ class AnalisisService:
     def buscar_analisis(
         db: Session,
         persona_id: int = None,
-        fecha_inicio: datetime | date = None,
-        fecha_fin: datetime | date = None,
+        fecha_inicio: Union[datetime, date, None] = None,
+        fecha_fin: Union[datetime, date, None] = None,
         limit: int = 50
     ) -> List[Analisis]:
         """Buscar análisis."""
