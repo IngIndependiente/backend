@@ -228,10 +228,11 @@ class MetaAPIClient:
         Returns:
             Lista de conversaciones
         """
-        # Para Instagram, usar el endpoint de media/conversations
+        # Para Instagram, el parámetro platform=instagram es obligatorio
         url = f"{self.base_url}/{instagram_account_id}/conversations"
         params = {
             "access_token": self.instagram_token,
+            "platform": "instagram",
             "fields": "id,updated_time,participants",
             "limit": limit
         }
@@ -253,7 +254,10 @@ class MetaAPIClient:
             error_message = error_data.get("error", {}).get("message", "")
             
             print(f"❌ Error al obtener conversaciones de Instagram: {e}")
-            
+            print(f"   Código: {error_code} | Mensaje: {error_message}")
+            if error_data:
+                print(f"   Respuesta completa: {error_data}")
+
             # Detectar errores específicos y dar soluciones
             if error_code == 3:
                 print("\n" + "="*80)
