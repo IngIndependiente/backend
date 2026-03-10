@@ -310,15 +310,23 @@ class CandidatoService:
                 }
     
     @staticmethod
-    def listar_candidatos() -> list:
-        """Listar todos los candidatos activos."""
+    def listar_candidatos(owner_facebook_user_id: Optional[str] = None) -> list:
+        """Listar todos los candidatos activos, opcionalmente filtrados por propietario."""
         if config.ENV == "local":
             storage = get_storage()
-            candidatos = storage.candidatos_df[storage.candidatos_df['estado'] == 'activo']
+            df = storage.candidatos_df
+            if 'owner_facebook_user_id' not in df.columns:
+                df['owner_facebook_user_id'] = None
+            candidatos = df[df['estado'] == 'activo']
+            if owner_facebook_user_id:
+                candidatos = candidatos[candidatos['owner_facebook_user_id'] == owner_facebook_user_id]
             return candidatos.to_dict('records')
         else:
             with get_db() as db:
-                candidatos = db.query(Candidato).filter(Candidato.estado == 'activo').all()
+                query = db.query(Candidato).filter(Candidato.estado == 'activo')
+                if owner_facebook_user_id:
+                    query = query.filter(Candidato.owner_facebook_user_id == owner_facebook_user_id)
+                candidatos = query.all()
                 return [{
                     'id': c.id,
                     'nombre': c.nombre,
