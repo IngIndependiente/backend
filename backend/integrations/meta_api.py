@@ -184,7 +184,6 @@ class MetaAPIClient:
         url = f"{self.base_url}/{page_id}/conversations"
         params = {
             "access_token": self.facebook_token,
-            "platform": "messenger",
             "fields": "participants,id,updated_time",
             "limit": limit
         }
@@ -338,7 +337,7 @@ class MetaAPIClient:
         url = f"{self.instagram_base_url}/{conversation_id}"
         params = {
             "access_token": self.facebook_token,
-            "fields": f"messages{{id,message,from,created_time}}.limit({limit})",
+            "fields": f"messages.limit({limit}){{id,message,from,created_time}}",
         }
         
         try:
