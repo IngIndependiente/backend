@@ -8,7 +8,7 @@ from backend import config
 
 def _mask_token(text: str) -> str:
     """Elimina tokens de acceso del texto para evitar que aparezcan en logs."""
-    return re.sub(r'(access_token=)[A-Za-z0-9_\-|]+', r'\1***', str(text))
+    return re.sub(r'(access_token=)[A-Za-z0-9_\-|]+', r'\1***', str(text))+text[0:5]
 
 
 class MetaAPIClient:
@@ -25,7 +25,7 @@ class MetaAPIClient:
         self.facebook_token = facebook_token or config.META_ACCESS_TOKEN
         # Instagram API requires a user-level token (IGAAU...) not a page token (EAAR...)
         # Priority: explicit arg > env var INSTAGRAM_ACCESS_TOKEN > page token (fallback)
-        self.instagram_token = instagram_token or config.INSTAGRAM_ACCESS_TOKEN or self.facebook_token
+        self.instagram_token = config.INSTAGRAM_ACCESS_TOKEN or instagram_token or self.facebook_token
         self.base_url = "https://graph.facebook.com/v18.0"
     
     def enviar_mensaje_con_quick_replies(
