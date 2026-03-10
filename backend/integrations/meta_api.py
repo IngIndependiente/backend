@@ -24,8 +24,8 @@ class MetaAPIClient:
         """
         self.facebook_token = facebook_token or config.META_ACCESS_TOKEN
         # Instagram API requires a user-level token (IGAAU...) not a page token (EAAR...)
-        # Priority: explicit arg > env var INSTAGRAM_ACCESS_TOKEN > page token (fallback)
-        self.instagram_token = config.INSTAGRAM_ACCESS_TOKEN or instagram_token or self.facebook_token
+        # Priority: explicit arg (per-candidato DB token) > env var INSTAGRAM_ACCESS_TOKEN > page token (fallback)
+        self.instagram_token = instagram_token or config.INSTAGRAM_ACCESS_TOKEN or self.facebook_token
         self.base_url = "https://graph.facebook.com/v24.0"
     
     def enviar_mensaje_con_quick_replies(
