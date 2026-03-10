@@ -1,8 +1,14 @@
 """Cliente para la API de Meta (Facebook e Instagram)."""
+import re
 import requests
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 from backend import config
+
+
+def _mask_token(text: str) -> str:
+    """Elimina tokens de acceso del texto para evitar que aparezcan en logs."""
+    return re.sub(r'(access_token=)[A-Za-z0-9_\-|]+', r'\1***', str(text))
 
 
 class MetaAPIClient:
@@ -17,8 +23,9 @@ class MetaAPIClient:
             instagram_token: Token específico de Instagram (opcional, usa facebook_token si no se provee)
         """
         self.facebook_token = facebook_token or config.META_ACCESS_TOKEN
-        # Instagram Business API usa el mismo token de la página de Facebook
-        self.instagram_token = instagram_token or self.facebook_token
+        # Instagram API requires a user-level token (IGAAU...) not a page token (EAAR...)
+        # Priority: explicit arg > env var INSTAGRAM_ACCESS_TOKEN > page token (fallback)
+        self.instagram_token = instagram_token or config.INSTAGRAM_ACCESS_TOKEN or self.facebook_token
         self.base_url = "https://graph.facebook.com/v18.0"
     
     def enviar_mensaje_con_quick_replies(
@@ -253,10 +260,8 @@ class MetaAPIClient:
             error_code = error_data.get("error", {}).get("code")
             error_message = error_data.get("error", {}).get("message", "")
             
-            print(f"❌ Error al obtener conversaciones de Instagram: {e}")
+            print(f"❌ Error al obtener conversaciones de Instagram: {_mask_token(e)}")
             print(f"   Código: {error_code} | Mensaje: {error_message}")
-            if error_data:
-                print(f"   Respuesta completa: {error_data}")
 
             # Detectar errores específicos y dar soluciones
             if error_code == 3:
@@ -287,7 +292,7 @@ class MetaAPIClient:
             elif error_code == 190:
                 print(f"❌ Token inválido o expirado. Genera un nuevo token.")
             else:
-                print(f"Respuesta completa: {response.text}")
+                print(f"   Error desconocido (código: {error_code}): {error_message}")
             
             return []
     

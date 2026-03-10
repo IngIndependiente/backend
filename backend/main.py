@@ -904,6 +904,9 @@ def sincronizar_candidato(
             candidato['facebook_page_access_token'],
             instagram_token=candidato.get('instagram_access_token')
         )
+        ig_token = candidato.get('instagram_access_token') or config.INSTAGRAM_ACCESS_TOKEN
+        token_source = "DB" if candidato.get('instagram_access_token') else ("ENV" if config.INSTAGRAM_ACCESS_TOKEN else "PAGE_TOKEN_FALLBACK")
+        print(f"   🔑 Instagram token source: {token_source} (starts with: {(ig_token or '')[:10]}...)")
         fecha_desde = datetime.utcnow() - timedelta(days=30 * meses_historico)
 
         _sync_job_update(candidato_id, state="running", progress=0, total=0,
@@ -2883,6 +2886,10 @@ def procesar_mensaje_whatsapp(phone: str, texto: str, username: str, message_id:
         # Extraer datos del agente (puede ser {} si el agente no está disponible)
         datos_extraidos = (resultado.get("datos_extraidos") if resultado else None) or {}
         error_agente = resultado.get("error") if resultado else None
+
+        # Fallback: si el agente no extrajo nombre, usar el nombre de WhatsApp del contacto
+        if not datos_extraidos.get("nombre_completo") and username:
+            datos_extraidos["nombre_completo"] = username
 
         if error_agente:
             if "RESOURCE_EXHAUSTED" in str(error_agente) or "429" in str(error_agente):
