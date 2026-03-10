@@ -905,8 +905,8 @@ def sincronizar_candidato(
             candidato['facebook_page_access_token'],
             instagram_token=candidato.get('instagram_access_token')
         )
-        ig_token = candidato.get('instagram_access_token') or config.INSTAGRAM_ACCESS_TOKEN
-        token_source = "DB" if candidato.get('instagram_access_token') else ("ENV" if config.INSTAGRAM_ACCESS_TOKEN else "PAGE_TOKEN_FALLBACK")
+        ig_token = config.INSTAGRAM_ACCESS_TOKEN or candidato.get('instagram_access_token')
+        token_source = "ENV" if config.INSTAGRAM_ACCESS_TOKEN else ("DB" if candidato.get('instagram_access_token') else "PAGE_TOKEN_FALLBACK")
         print(f"   🔑 Instagram token source: {token_source} (starts with: {(ig_token or '')[:10]}...)")
         if desde_fecha:
             try:
@@ -1635,11 +1635,15 @@ def exportar_personas(busqueda: BusquedaRequest):
             )
         
     data = []
+    candidato_ids_owner = _get_candidato_ids_por_owner(busqueda.facebook_user_id)
     
     if USE_DATAFRAMES:
         for analisis in analisis_candidates:
             persona = PersonaService.obtener_persona_por_id(analisis['persona_id'])
             if not persona: continue
+
+            # Filtro por propietario
+            if candidato_ids_owner is not None and persona.get('candidato_id') not in candidato_ids_owner: continue
             
             # Filtros demográficos
             if busqueda.genero and persona.get('genero') != busqueda.genero: continue
@@ -1672,6 +1676,9 @@ def exportar_personas(busqueda: BusquedaRequest):
     else:
         for analisis in analisis_candidates:
             persona = analisis.persona
+
+            # Filtro por propietario
+            if candidato_ids_owner is not None and persona.candidato_id not in candidato_ids_owner: continue
             
             # Filtros demográficos
             if busqueda.genero and persona.genero != busqueda.genero: continue
