@@ -41,6 +41,9 @@ class Persona(Base):
     # Multi-tenant: asociar persona con candidato
     candidato_id = Column(Integer, ForeignKey('candidatos.id'), nullable=True)
     
+    # Origen de los datos
+    plataforma = Column(String(50), nullable=True)  # 'facebook', 'instagram', 'whatsapp'
+    
     # Fechas
     fecha_primer_contacto = Column(DateTime, default=datetime.utcnow)
     fecha_ultimo_contacto = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -131,6 +134,9 @@ class Analisis(Base):
     resumen = Column(Text, nullable=True)
     categorias = Column(String(200), nullable=True)  # JSON list of categories
     
+    # Origen del análisis
+    plataforma = Column(String(50), nullable=True)  # 'facebook', 'instagram', 'whatsapp'
+    
     # Metadatos temporalidad
     start_conversation = Column(DateTime, nullable=True)  # Cuándo inició esta sesión de conversación
     fecha_analisis = Column(DateTime, default=datetime.utcnow)  # Cuándo se analizó
@@ -174,6 +180,9 @@ class Candidato(Base):
     
     # Estado
     estado = Column(String(50), default='activo')  # 'activo', 'inactivo', 'suspendido'
+    
+    # Propietario: facebook_user_id del usuario que conectó esta página via OAuth
+    owner_facebook_user_id = Column(String(200), nullable=True)
     
     # Autenticación de usuario (opcional si no usas Facebook Login para entrar al dashboard)
     password_hash = Column(String(500), nullable=True)

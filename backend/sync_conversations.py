@@ -231,14 +231,18 @@ def procesar_mensajes_usuario(
             PersonaService.crear_o_actualizar_persona(
                 datos=datos,
                 facebook_id=facebook_id,
-                instagram_id=instagram_id
+                instagram_id=instagram_id,
+                candidato_id=candidato_id,
+                plataforma=plataforma
             )
         else:
             PersonaService.crear_o_actualizar_persona(
                 db,
                 datos=datos,
                 facebook_id=facebook_id,
-                instagram_id=instagram_id
+                instagram_id=instagram_id,
+                candidato_id=candidato_id,
+                plataforma=plataforma
             )
         
         # Guardar Fila de Análisis
@@ -248,7 +252,8 @@ def procesar_mensajes_usuario(
                 resumen=resumen,
                 contenido_completo=texto_sesion,
                 categorias=datos.get("intereses"),
-                start_conversation=start_time_utc
+                start_conversation=start_time_utc,
+                plataforma=plataforma
             )
         else:
             AnalisisService.crear_analisis(
@@ -257,7 +262,8 @@ def procesar_mensajes_usuario(
                 resumen=resumen,
                 contenido_completo=texto_sesion,
                 categorias=datos.get("intereses"),
-                start_conversation=start_time_utc
+                start_conversation=start_time_utc,
+                plataforma=plataforma
             )
         print(f"   ✅ Día registrado ({fecha_cl}): {resumen[:50]}...")
 

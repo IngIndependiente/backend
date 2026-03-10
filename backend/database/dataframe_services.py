@@ -15,7 +15,9 @@ class DataFramePersonaService:
         datos: Dict[str, Any],
         facebook_id: str = None,
         instagram_id: str = None,
-        telefono: str = None
+        telefono: str = None,
+        candidato_id: int = None,
+        plataforma: str = None
     ) -> Dict[str, Any]:
         """Crear o actualizar una persona."""
         storage = get_storage()
@@ -45,9 +47,18 @@ class DataFramePersonaService:
                 'facebook_id': facebook_id,
                 'instagram_id': instagram_id,
                 'telefono': telefono,
+                'candidato_id': candidato_id,
+                'plataforma': plataforma,
                 'fecha_primer_contacto': now,
                 'fecha_creacion': now
             }
+        else:
+            # Actualizar candidato_id y plataforma si no estaban set
+            import pandas as pd
+            if candidato_id and (not persona.get('candidato_id') or pd.isna(persona.get('candidato_id'))):
+                persona['candidato_id'] = candidato_id
+            if plataforma and not persona.get('plataforma'):
+                persona['plataforma'] = plataforma
         
         # Actualizar datos
         if datos.get("nombre_completo"):
@@ -182,7 +193,8 @@ class DataFrameAnalisisService:
         contenido_completo: str = None,
         categorias: List[str] = None,
         start_conversation: datetime = None,
-        evento_id: int = None
+        evento_id: int = None,
+        plataforma: str = None
     ) -> Dict[str, Any]:
         """Crear un análisis evitando duplicados para la misma sesión."""
         storage = get_storage()
@@ -224,6 +236,7 @@ class DataFrameAnalisisService:
             'evento_id': evento_id,
             'resumen': resumen,
             'categorias': json.dumps(categorias) if categorias else None,
+            'plataforma': plataforma,
             'start_conversation': start_conversation or datetime.now(),
             'fecha_analisis': datetime.now(),
             'contenido_completo': contenido_completo

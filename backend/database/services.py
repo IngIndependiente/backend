@@ -17,20 +17,12 @@ class PersonaService:
         datos: Dict[str, Any],
         facebook_id: str = None,
         instagram_id: str = None,
-        telefono: str = None
+        telefono: str = None,
+        candidato_id: int = None,
+        plataforma: str = None
     ) -> Persona:
         """
         Crear o actualizar una persona con los datos extraídos.
-        
-        Args:
-            db: Sesión de base de datos
-            datos: Diccionario con datos extraídos
-            facebook_id: ID de Facebook
-            instagram_id: ID de Instagram
-            telefono: Número de teléfono (WhatsApp)
-            
-        Returns:
-            Persona creada o actualizada
         """
         # Buscar persona existente
         persona = None
@@ -48,9 +40,17 @@ class PersonaService:
                 facebook_id=facebook_id,
                 instagram_id=instagram_id,
                 telefono=telefono,
+                candidato_id=candidato_id,
+                plataforma=plataforma,
                 fecha_primer_contacto=datetime.utcnow()
             )
             db.add(persona)
+        else:
+            # Actualizar candidato_id y plataforma si no estaban set
+            if candidato_id and not persona.candidato_id:
+                persona.candidato_id = candidato_id
+            if plataforma and not persona.plataforma:
+                persona.plataforma = plataforma
         
         # Actualizar datos solo si están presentes
         if datos.get("nombre_completo"):
@@ -227,7 +227,8 @@ class AnalisisService:
         resumen: str,
         contenido_completo: str,
         categorias: List[str] = None,
-        start_conversation: datetime = None
+        start_conversation: datetime = None,
+        plataforma: str = None
     ) -> Analisis:
         """Crear un nuevo análisis de sesión, evitando duplicados para el mismo inicio de sesión."""
         # Evitar duplicados si tenemos start_conversation
@@ -248,6 +249,7 @@ class AnalisisService:
             resumen=resumen,
             contenido_completo=contenido_completo,
             categorias=json.dumps(categorias) if categorias else "[]",
+            plataforma=plataforma,
             start_conversation=start_conversation or datetime.utcnow(),
             fecha_analisis=datetime.utcnow()
         )

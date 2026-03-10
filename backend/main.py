@@ -136,6 +136,7 @@ class PersonaResponse(BaseModel):
     fecha_ultimo_contacto: datetime
     evento_id: Optional[int] = None
     evento_nombre: Optional[str] = None
+    plataforma: Optional[str] = None  # 'Messenger', 'Instagram', 'WhatsApp'
     
     class Config:
         from_attributes = True
@@ -150,6 +151,7 @@ class BusquedaRequest(BaseModel):
     ubicacion: Optional[str] = None
     fecha_inicio: Optional[str] = None
     fecha_fin: Optional[str] = None
+    facebook_user_id: Optional[str] = None  # Filtrar solo datos del usuario autenticado
 
 
 # === Modelos Pydantic para Admin Usuarios ===
@@ -213,7 +215,7 @@ def verificar_admin_token(authorization: str = Header(None)):
     if not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Formato de token inválido. Use: Bearer <token>")
     
-    token = authorization.replace("Bearer ", "")
+    token = authorization.replace("Bearer ", "").strip()
     
     if token != ADMIN_TOKEN:
         raise HTTPException(status_code=403, detail="Token inválido")
@@ -227,7 +229,7 @@ def verificar_admin_token(authorization: str = Header(None)):
 def root():
     """Endpoint raíz."""
     return {
-        "message": "Agente Político API",
+        "message": "Agente CRM API",
         "version": "1.0.1",
         "endpoints": {
             "personas": "/api/personas",
@@ -468,7 +470,11 @@ async def facebook_callback(
         
         # 4. Guardar páginas en store temporal con token y redirigir al frontend
         oauth_token = str(uuid.uuid4())
-        _oauth_sessions[oauth_token] = pages_info
+        _oauth_sessions[oauth_token] = {
+            "pages": pages_info,
+            "facebook_user_id": facebook_id,
+            "user_name": user_name
+        }
         
         from fastapi.responses import HTMLResponse
         
@@ -549,10 +555,13 @@ async def obtener_oauth_session(token: str):
     Devuelve las páginas de Facebook almacenadas temporalmente para un token OAuth.
     Se elimina automáticamente tras la primera lectura.
     """
-    pages = _oauth_sessions.pop(token, None)
-    if pages is None:
+    session = _oauth_sessions.pop(token, None)
+    if session is None:
         raise HTTPException(status_code=404, detail="Sesión OAuth no encontrada o ya utilizada")
-    return {"pages": pages}
+    # Soporte tanto para el formato nuevo (dict) como legado (list)
+    if isinstance(session, list):
+        return {"pages": session, "facebook_user_id": None}
+    return {"pages": session.get("pages", []), "facebook_user_id": session.get("facebook_user_id")}
 
 
 # =============================================================================
@@ -689,21 +698,10 @@ async def eliminar_usuario(
     return None
 
 
-@app.post("/admin/usuarios/generar-token", tags=["Admin"])
+@app.post("/admin/usuarios/generar-token", tags=["Admin"], include_in_schema=False)
 async def generar_token_admin():
-    """
-    Genera un nuevo token de administrador.
-    ⚠️ USAR SOLO UNA VEZ al configurar la app.
-    Luego eliminar este endpoint por seguridad.
-    """
-    nuevo_token = secrets.token_urlsafe(32)
-    
-    return {
-        "token": nuevo_token,
-        "mensaje": "Guarda este token en variable de entorno ADMIN_TOKEN",
-        "ejemplo": f"heroku config:set ADMIN_TOKEN={nuevo_token}",
-        "advertencia": "Elimina este endpoint /generar-token después de configurar el token"
-    }
+    """Endpoint deshabilitado por seguridad."""
+    raise HTTPException(status_code=410, detail="Endpoint deshabilitado")
 
 
 # =============================================================================
@@ -733,6 +731,7 @@ async def conectar_paginas_seleccionadas(request: Request):
         body = await request.json()
         pages = body.get("pages", [])
         email_base = body.get("email_base", "user")
+        owner_facebook_user_id = body.get("facebook_user_id")  # Propietario del usuario OAuth
         
         if not pages:
             raise HTTPException(status_code=400, detail="No se proporcionaron páginas para conectar")
@@ -765,7 +764,8 @@ async def conectar_paginas_seleccionadas(request: Request):
                         facebook_page_access_token=page_access_token,
                         facebook_token_expiration=datetime.now(),
                         instagram_business_account_id=instagram_id,
-                        instagram_username=instagram_username
+                        instagram_username=instagram_username,
+                        owner_facebook_user_id=owner_facebook_user_id
                     )
                     candidatos_actualizados.append({
                         "id": candidato['id'],
@@ -785,7 +785,8 @@ async def conectar_paginas_seleccionadas(request: Request):
                         facebook_page_access_token=page_access_token,
                         facebook_token_expiration=datetime.now(),
                         instagram_business_account_id=instagram_id,
-                        instagram_username=instagram_username
+                        instagram_username=instagram_username,
+                        owner_facebook_user_id=owner_facebook_user_id
                     )
                     candidatos_creados.append({
                         "id": candidato['id'],
@@ -1003,7 +1004,8 @@ def sincronizar_conversaciones_tarea(
                     plataforma=plataforma,
                     mensajes=mensajes,
                     ignorar_id=page_id,
-                    force_reprocess=force_reprocess
+                    force_reprocess=force_reprocess,
+                    candidato_id=candidato_id
                 )
                 
                 print(f"      ✅ Procesado: {username or user_id} ({len(mensajes)} mensajes)")
@@ -1166,7 +1168,8 @@ def listar_personas(
                 "fecha_primer_contacto": persona['fecha_primer_contacto'],
                 "fecha_ultimo_contacto": analisis.get('start_conversation') or analisis.get('fecha_analisis'),
                 "evento_id": int(analisis['evento_id']) if analisis.get('evento_id') and pd.notna(analisis['evento_id']) else None,
-                "evento_nombre": evento_nombre
+                "evento_nombre": evento_nombre,
+                "plataforma": analisis.get('plataforma') or _derivar_plataforma(persona)
             })
     else:
         # Modo SQLAlchemy — necesita sesión de BD
@@ -1205,7 +1208,8 @@ def listar_personas(
                     "fecha_primer_contacto": persona.fecha_primer_contacto,
                     "fecha_ultimo_contacto": analisis.start_conversation or analisis.fecha_analisis,
                     "evento_id": analisis.evento_id,
-                    "evento_nombre": analisis.evento.nombre if analisis.evento else None
+                    "evento_nombre": analisis.evento.nombre if analisis.evento else None,
+                    "plataforma": analisis.plataforma or _derivar_plataforma(persona)
                 })
     
     return resultado
@@ -1271,6 +1275,33 @@ def obtener_persona(persona_id: int):
 
 
 from collections import Counter
+
+
+def _derivar_plataforma(persona: dict) -> Optional[str]:
+    """Determina el origen/plataforma de una persona a partir de sus campos."""
+    # Primero usar el campo explícito si está disponible
+    plat = persona.get('plataforma') if isinstance(persona, dict) else getattr(persona, 'plataforma', None)
+    if plat:
+        return plat.capitalize() if plat else None
+    # Inferir desde IDs de redes sociales
+    instagram_id = persona.get('instagram_id') if isinstance(persona, dict) else getattr(persona, 'instagram_id', None)
+    facebook_id = persona.get('facebook_id') if isinstance(persona, dict) else getattr(persona, 'facebook_id', None)
+    telefono = persona.get('telefono') if isinstance(persona, dict) else getattr(persona, 'telefono', None)
+    if instagram_id:
+        return 'Instagram'
+    if facebook_id:
+        return 'Messenger'
+    if telefono:
+        return 'WhatsApp'
+    return None
+
+
+def _get_candidato_ids_por_owner(facebook_user_id: Optional[str]) -> Optional[set]:
+    """Retorna set de candidato_ids pertenecientes al usuario, o None si no hay filtro."""
+    if not facebook_user_id:
+        return None
+    ids = CandidatoService.listar_candidatos_por_owner(facebook_user_id)
+    return set(ids)
 
 
 def _safe_val(val):
@@ -1371,6 +1402,10 @@ def _buscar_personas_impl(busqueda: BusquedaRequest):  # noqa: C901
             personas_df = personas_df[personas_df['ubicacion'].fillna('').str.lower().str.contains(busqueda.ubicacion.lower(), na=False)]
         if persona_ids_en_rango is not None:
             personas_df = personas_df[personas_df['id'].isin(persona_ids_en_rango)]
+        # Filtro por propietario: solo personas del candidato conectado
+        candidato_ids_owner = _get_candidato_ids_por_owner(busqueda.facebook_user_id)
+        if candidato_ids_owner is not None and 'candidato_id' in personas_df.columns:
+            personas_df = personas_df[personas_df['candidato_id'].isin(candidato_ids_owner)]
 
         for _, persona in personas_df.iterrows():
             persona_id = persona['id']
@@ -1432,6 +1467,7 @@ def _buscar_personas_impl(busqueda: BusquedaRequest):  # noqa: C901
                 "fecha_ultimo_contacto": _safe_date(fecha_ult),
                 "evento_id": evento_id,
                 "evento_nombre": _safe_val(evento_nombre),
+                "plataforma": _safe_val(analisis.get('plataforma')) if analisis else _derivar_plataforma(dict(persona)),
             })
 
         # Ordenar por fecha_ultimo_contacto descendente
@@ -1464,6 +1500,10 @@ def _buscar_personas_impl(busqueda: BusquedaRequest):  # noqa: C901
                     p_intereses = [i.categoria for i in persona.intereses]
                     if not any(i in p_intereses for i in busqueda.intereses):
                         continue
+                # Filtro por propietario
+                candidato_ids_owner = _get_candidato_ids_por_owner(busqueda.facebook_user_id)
+                if candidato_ids_owner is not None and persona.candidato_id not in candidato_ids_owner:
+                    continue
 
                 # Formatear intereses
                 intereses = []
@@ -1492,6 +1532,7 @@ def _buscar_personas_impl(busqueda: BusquedaRequest):  # noqa: C901
                     "fecha_ultimo_contacto": fpc.isoformat() if fpc else None,
                     "evento_id": analisis.evento_id,
                     "evento_nombre": analisis.evento.nombre if analisis.evento else None,
+                    "plataforma": analisis.plataforma or _derivar_plataforma(persona),
                 })
     
     # 4. Calcular Estadísticas Filtradas

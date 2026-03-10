@@ -29,7 +29,8 @@ class CandidatoService:
         whatsapp_phone_number_id: Optional[str] = None,
         whatsapp_business_account_id: Optional[str] = None,
         whatsapp_phone_number: Optional[str] = None,
-        password_hash: Optional[str] = None
+        password_hash: Optional[str] = None,
+        owner_facebook_user_id: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Crear nuevo candidato.
@@ -65,6 +66,7 @@ class CandidatoService:
                 'whatsapp_business_account_id': whatsapp_business_account_id,
                 'whatsapp_phone_number': whatsapp_phone_number,
                 'estado': 'activo',
+                'owner_facebook_user_id': owner_facebook_user_id,
                 'password_hash': password_hash,
                 'fecha_registro': ahora,
                 'fecha_ultimo_login': None,
@@ -98,6 +100,7 @@ class CandidatoService:
                     whatsapp_business_account_id=whatsapp_business_account_id,
                     whatsapp_phone_number=whatsapp_phone_number,
                     estado='activo',
+                    owner_facebook_user_id=owner_facebook_user_id,
                     password_hash=password_hash
                 )
                 
@@ -238,7 +241,8 @@ class CandidatoService:
         facebook_page_access_token: str,
         facebook_token_expiration: datetime,
         instagram_business_account_id: Optional[str] = None,
-        instagram_username: Optional[str] = None
+        instagram_username: Optional[str] = None,
+        owner_facebook_user_id: Optional[str] = None
     ) -> Dict[str, Any]:
         """Actualizar tokens de Facebook/Instagram para un candidato."""
         if config.ENV == "local":
@@ -258,6 +262,8 @@ class CandidatoService:
                 storage.candidatos_df.loc[mask, 'instagram_business_account_id'] = instagram_business_account_id
             if instagram_username:
                 storage.candidatos_df.loc[mask, 'instagram_username'] = instagram_username
+            if owner_facebook_user_id:
+                storage.candidatos_df.loc[mask, 'owner_facebook_user_id'] = owner_facebook_user_id
             
             storage.candidatos_df.loc[mask, 'fecha_actualizacion'] = datetime.now()
             storage.save_candidatos()
@@ -279,6 +285,8 @@ class CandidatoService:
                     candidato.instagram_business_account_id = instagram_business_account_id
                 if instagram_username:
                     candidato.instagram_username = instagram_username
+                if owner_facebook_user_id:
+                    candidato.owner_facebook_user_id = owner_facebook_user_id
                 
                 db.commit()
                 db.refresh(candidato)
@@ -367,3 +375,24 @@ class CandidatoService:
                     'whatsapp_business_account_id': candidato.whatsapp_business_account_id,
                     'whatsapp_phone_number': candidato.whatsapp_phone_number
                 }
+
+    @staticmethod
+    def listar_candidatos_por_owner(owner_facebook_user_id: str) -> list:
+        """
+        Listar IDs de candidatos activos cuyo propietario es el usuario con ese facebook_user_id.
+        Devuelve lista de candidato_id (int).
+        """
+        if config.ENV == "local":
+            storage = get_storage()
+            df = storage.candidatos_df
+            if 'owner_facebook_user_id' not in df.columns:
+                return []
+            mask = (df['estado'] == 'activo') & (df['owner_facebook_user_id'] == owner_facebook_user_id)
+            return df[mask]['id'].astype(int).tolist()
+        else:
+            with get_db() as db:
+                candidatos = db.query(Candidato).filter(
+                    Candidato.estado == 'activo',
+                    Candidato.owner_facebook_user_id == owner_facebook_user_id
+                ).all()
+                return [c.id for c in candidatos]

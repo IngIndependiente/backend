@@ -66,6 +66,8 @@ if IS_WEB_ENV:
 else:
     # En local: permitir acceso abierto para desarrollo
     VALIDAR_USUARIOS = os.getenv("VALIDAR_USUARIOS", "False").lower() in ("true", "1", "yes")
+VALIDAR_USUARIOS = False  # DESHABILITADO POR AHORA, se implementará en futuras versiones
+ADMIN_TOKEN = os.getenv("ADMIN_TOKEN")
 
 # WhatsApp Business API
 WHATSAPP_PHONE_NUMBER_ID = os.getenv("WHATSAPP_PHONE_NUMBER_ID")

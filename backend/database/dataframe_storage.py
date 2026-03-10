@@ -52,7 +52,12 @@ class DataFrameStorage:
         """Cargar DataFrame desde archivo o crear uno nuevo."""
         if file_path.exists():
             try:
-                return pd.read_parquet(file_path)
+                df = pd.read_parquet(file_path)
+                # Agregar columnas nuevas del schema que no existan en el archivo guardado
+                for col in schema:
+                    if col not in df.columns:
+                        df[col] = None
+                return df
             except Exception as e:
                 # usar logger si está inicializado, si no fallback a print
                 try:
@@ -80,6 +85,7 @@ class DataFrameStorage:
             'whatsapp_business_account_id': pd.Series(dtype='object'),
             'whatsapp_phone_number': pd.Series(dtype='object'),
             'estado': pd.Series(dtype='object'),
+            'owner_facebook_user_id': pd.Series(dtype='object'),
             'password_hash': pd.Series(dtype='object'),
             'fecha_registro': pd.Series(dtype='datetime64[ns]'),
             'fecha_ultimo_login': pd.Series(dtype='datetime64[ns]'),
@@ -102,6 +108,8 @@ class DataFrameStorage:
             'ocupacion': pd.Series(dtype='object'),
             'ubicacion': pd.Series(dtype='object'),
             'resumen': pd.Series(dtype='object'),
+            'candidato_id': pd.Series(dtype='Int64'),  # Multi-tenant FK nullable
+            'plataforma': pd.Series(dtype='object'),    # 'facebook', 'instagram', 'whatsapp'
             'fecha_primer_contacto': pd.Series(dtype='datetime64[ns]'),
             'fecha_ultimo_contacto': pd.Series(dtype='datetime64[ns]'),
             'fecha_creacion': pd.Series(dtype='datetime64[ns]')
@@ -129,6 +137,7 @@ class DataFrameStorage:
             'evento_id': pd.Series(dtype='Int64'),  # Nullable
             'resumen': pd.Series(dtype='object'),
             'categorias': pd.Series(dtype='object'),
+            'plataforma': pd.Series(dtype='object'),  # 'facebook', 'instagram', 'whatsapp'
             'start_conversation': pd.Series(dtype='datetime64[ns]'),
             'fecha_analisis': pd.Series(dtype='datetime64[ns]'),
             'contenido_completo': pd.Series(dtype='object')
