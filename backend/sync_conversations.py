@@ -49,7 +49,8 @@ def procesar_mensajes_usuario(
     plataforma: str,
     mensajes: List[Dict[str, Any]],
     ignorar_id: str = None,
-    force_reprocess: bool = False
+    force_reprocess: bool = False,
+    candidato_id: int = None
 ):
     """Procesa todo el historial de mensajes de un usuario."""
     print(f"\n👤 Procesando historial de: {username or user_id} ({len(mensajes)} mensajes)")
@@ -67,9 +68,12 @@ def procesar_mensajes_usuario(
             instagram_id=instagram_id
         )
     else:
+        datos_persona = {"nombre_completo": username} if username else {}
+        if candidato_id:
+            datos_persona["candidato_id"] = candidato_id
         persona = PersonaService.crear_o_actualizar_persona(
             db,
-            datos={"nombre_completo": username} if username else {},
+            datos=datos_persona,
             facebook_id=facebook_id,
             instagram_id=instagram_id
         )
