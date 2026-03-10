@@ -176,7 +176,7 @@ class MetaAPIClient:
         url = f"{self.base_url}/{page_id}/conversations"
         params = {
             "access_token": self.facebook_token,
-            "fields": "participants,messages{message,from,created_time}",
+            "fields": "participants",
             "limit": limit
         }
         
@@ -290,7 +290,9 @@ class MetaAPIClient:
                 print("   Los usuarios de prueba pueden usar la app sin aprobación.")
                 print("="*80 + "\n")
             elif error_code == 190:
-                print(f"❌ Token inválido o expirado. Genera un nuevo token.")
+                print(f"❌ Token de Instagram inválido o expirado (código 190).")
+                print(f"   Usa el botón 'Token IG' en el panel para ingresar un token válido (IGAAU...).")
+                print(f"   Genéralo en: https://developers.facebook.com/tools/explorer/")
             else:
                 print(f"   Error desconocido (código: {error_code}): {error_message}")
             
