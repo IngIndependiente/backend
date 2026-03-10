@@ -27,7 +27,9 @@ class MetaAPIClient:
         # Priority: explicit arg (per-candidato DB token) > env var INSTAGRAM_ACCESS_TOKEN > page token (fallback)
         self.instagram_token = self._tok(instagram_token) or self._tok(config.INSTAGRAM_ACCESS_TOKEN) or self.facebook_token
         self.base_url = "https://graph.facebook.com/v24.0"
-        self.instagram_base_url = "https://graph.instagram.com/v24.0"
+        # Instagram DM API via Messenger Platform uses graph.facebook.com + platform=instagram
+        # (graph.instagram.com requires a separate Instagram Business Login OAuth token)
+        self.instagram_base_url = "https://graph.facebook.com/v24.0"
 
     @staticmethod
     def _tok(value) -> Optional[str]:
@@ -182,7 +184,8 @@ class MetaAPIClient:
         url = f"{self.base_url}/{page_id}/conversations"
         params = {
             "access_token": self.facebook_token,
-            "fields": "participants",
+            "platform": "messenger",
+            "fields": "participants,id,updated_time",
             "limit": limit
         }
         
@@ -192,7 +195,20 @@ class MetaAPIClient:
             data = response.json()
             return data.get("data", [])
         except requests.exceptions.RequestException as e:
-            print(f"Error al obtener conversaciones de Facebook: {e}")
+            error_body = {}
+            try:
+                error_body = response.json()
+            except Exception:
+                pass
+            error_code = error_body.get("error", {}).get("code")
+            error_msg = error_body.get("error", {}).get("message", "")
+            print(f"Error al obtener conversaciones de Facebook: {_mask_token(e)}")
+            if error_code:
+                print(f"   Código FB: {error_code} | Mensaje: {error_msg}")
+                if error_code in (10, 200, 294):
+                    print("   ⚠️  Permiso faltante: genera un token con 'pages_messaging' habilitado.")
+                elif error_code == 190:
+                    print("   ⚠️  Token de Facebook expirado o inválido.")
             return []
     
     def obtener_mensajes_conversacion_facebook(
@@ -244,7 +260,7 @@ class MetaAPIClient:
         # Para Instagram, el parámetro platform=instagram es obligatorio
         url = f"{self.instagram_base_url}/{instagram_account_id}/conversations"
         params = {
-            "access_token": self.instagram_token,
+            "access_token": self.facebook_token,
             "platform": "instagram",
             "fields": "id,updated_time,participants{id,username,name}",
             "limit": limit
@@ -321,7 +337,7 @@ class MetaAPIClient:
         """
         url = f"{self.instagram_base_url}/{conversation_id}"
         params = {
-            "access_token": self.instagram_token,
+            "access_token": self.facebook_token,
             "fields": f"messages{{id,message,from,created_time}}.limit({limit})",
         }
         

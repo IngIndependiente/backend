@@ -932,8 +932,9 @@ def sincronizar_candidato(
             plataformas = []
             if sincronizar_facebook and candidato.get('facebook_page_id'):
                 plataformas.append(("facebook", candidato['facebook_page_id']))
-            if sincronizar_instagram and candidato.get('instagram_business_account_id'):
-                plataformas.append(("instagram", candidato['instagram_business_account_id']))
+            # Instagram conversations via Messenger Platform use the Facebook Page ID, not the IG Business Account ID
+            if sincronizar_instagram and candidato.get('facebook_page_id'):
+                plataformas.append(("instagram", candidato['facebook_page_id']))
 
             if not plataformas:
                 _sync_job_update(candidato_id, state="done", message="No hay cuentas configuradas para sincronizar.")
