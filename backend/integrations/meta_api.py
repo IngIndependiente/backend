@@ -28,6 +28,8 @@ class MetaAPIClient:
         self.instagram_token = self._tok(instagram_token) or self._tok(config.INSTAGRAM_ACCESS_TOKEN) or self.facebook_token
         self.base_url = "https://graph.facebook.com/v24.0"
         self.instagram_base_url = "https://graph.instagram.com/v24.0"
+
+    @staticmethod
     def _tok(value) -> Optional[str]:
         """Return value only if it is a non-empty string (guards against pandas NaN)."""
         return value if isinstance(value, str) and value.strip() else None
