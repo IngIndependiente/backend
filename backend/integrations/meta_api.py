@@ -22,11 +22,15 @@ class MetaAPIClient:
             facebook_token: Token específico de página (opcional, usa .env si no se provee)
             instagram_token: Token específico de Instagram (opcional, usa facebook_token si no se provee)
         """
-        self.facebook_token = facebook_token or config.META_ACCESS_TOKEN
+        self.facebook_token = self._tok(facebook_token) or self._tok(config.META_ACCESS_TOKEN)
         # Instagram API requires a user-level token (IGAAU...) not a page token (EAAR...)
         # Priority: explicit arg (per-candidato DB token) > env var INSTAGRAM_ACCESS_TOKEN > page token (fallback)
-        self.instagram_token = instagram_token or config.INSTAGRAM_ACCESS_TOKEN or self.facebook_token
+        self.instagram_token = self._tok(instagram_token) or self._tok(config.INSTAGRAM_ACCESS_TOKEN) or self.facebook_token
         self.base_url = "https://graph.facebook.com/v24.0"
+        self.instagram_base_url = "https://graph.instagram.com/v24.0"
+    def _tok(value) -> Optional[str]:
+        """Return value only if it is a non-empty string (guards against pandas NaN)."""
+        return value if isinstance(value, str) and value.strip() else None
     
     def enviar_mensaje_con_quick_replies(
         self,
@@ -236,7 +240,7 @@ class MetaAPIClient:
             Lista de conversaciones
         """
         # Para Instagram, el parámetro platform=instagram es obligatorio
-        url = f"{self.base_url}/{instagram_account_id}/conversations"
+        url = f"{self.instagram_base_url}/{instagram_account_id}/conversations"
         params = {
             "access_token": self.instagram_token,
             "platform": "instagram",
@@ -313,7 +317,7 @@ class MetaAPIClient:
         Returns:
             Lista de mensajes
         """
-        url = f"{self.base_url}/{conversation_id}"
+        url = f"{self.instagram_base_url}/{conversation_id}"
         params = {
             "access_token": self.instagram_token,
             "fields": f"messages{{id,message,from,created_time}}.limit({limit})",

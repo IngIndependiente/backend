@@ -912,9 +912,10 @@ def sincronizar_candidato(
             candidato['facebook_page_access_token'],
             instagram_token=candidato.get('instagram_access_token')
         )
-        ig_token = config.INSTAGRAM_ACCESS_TOKEN or candidato.get('instagram_access_token')
-        token_source = "ENV" if config.INSTAGRAM_ACCESS_TOKEN else ("DB" if candidato.get('instagram_access_token') else "PAGE_TOKEN_FALLBACK")
-        print(f"   🔑 Instagram token source: {token_source} (starts with: {(ig_token or '')[:10]}...)")
+        _ig_db = candidato.get('instagram_access_token')
+        _ig_valid = isinstance(_ig_db, str) and bool(_ig_db.strip())
+        token_source = "DB" if _ig_valid else ("ENV" if config.INSTAGRAM_ACCESS_TOKEN else "PAGE_TOKEN_FALLBACK")
+        print(f"   🔑 Instagram token source: {token_source} | db_raw={repr(_ig_db)[:30]} | prefix={(cliente.instagram_token or '')[:12]}...")
         if desde_fecha:
             try:
                 fecha_desde = datetime.strptime(desde_fecha, "%Y-%m-%d")
