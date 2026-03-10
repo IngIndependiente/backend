@@ -66,6 +66,23 @@ def init_db():
                 print("✓ Columna owner_facebook_user_id agregada a candidatos")
     except Exception as e:
         print(f"Migración candidatos.owner_facebook_user_id (puede ser normal si ya existe): {e}")
+
+    # Migración: agregar columnas plataforma y candidato_id a personas si no existen
+    try:
+        with engine.connect() as conn:
+            if "sqlite" not in config.DATABASE_URL:
+                conn.execute(text("""
+                    ALTER TABLE personas
+                    ADD COLUMN IF NOT EXISTS plataforma VARCHAR(50)
+                """))
+                conn.execute(text("""
+                    ALTER TABLE personas
+                    ADD COLUMN IF NOT EXISTS candidato_id INTEGER REFERENCES candidatos(id)
+                """))
+                conn.commit()
+                print("✓ Columnas plataforma y candidato_id agregadas a personas")
+    except Exception as e:
+        print(f"Migración personas.plataforma/candidato_id (puede ser normal si ya existe): {e}")
     
     # Crear categorías de intereses predeterminadas
     session = SessionLocal()
