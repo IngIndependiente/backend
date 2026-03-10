@@ -908,13 +908,18 @@ def sincronizar_candidato(
         if job.get("state") == "running":
             return {"ok": False, "message": "Ya hay una sincronización en curso para este candidato."}
 
+        # Para leer conversaciones se necesita pages_messaging — META_ACCESS_TOKEN (generado con ese
+        # scope en el Explorer) tiene prioridad sobre el token por-candidato guardado en BD.
+        _fb_token = config.META_ACCESS_TOKEN or candidato['facebook_page_access_token']
         cliente = crear_cliente_candidato(
-            candidato['facebook_page_access_token'],
+            _fb_token,
             instagram_token=candidato.get('instagram_access_token')
         )
         _ig_db = candidato.get('instagram_access_token')
         _ig_valid = isinstance(_ig_db, str) and bool(_ig_db.strip())
         token_source = "DB" if _ig_valid else ("ENV" if config.INSTAGRAM_ACCESS_TOKEN else "PAGE_TOKEN_FALLBACK")
+        _fb_src = "ENV(META_ACCESS_TOKEN)" if config.META_ACCESS_TOKEN else "DB(facebook_page_access_token)"
+        print(f"   🔑 Facebook token source: {_fb_src} | prefix={_fb_token[:12]}...")
         print(f"   🔑 Instagram token source: {token_source} | db_raw={repr(_ig_db)[:30]} | prefix={(cliente.instagram_token or '')[:12]}...")
         if desde_fecha:
             try:
