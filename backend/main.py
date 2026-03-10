@@ -845,8 +845,15 @@ _sync_jobs_lock = threading.Lock()
 def _sync_job_update(candidato_id: int, **kwargs):
     with _sync_jobs_lock:
         if candidato_id not in _sync_jobs:
-            _sync_jobs[candidato_id] = {"state": "idle", "progress": 0, "total": 0, "message": "", "errors": []}
+            _sync_jobs[candidato_id] = {"state": "idle", "progress": 0, "total": 0, "message": "", "errors": [], "phase": "", "fb_total": 0, "fb_progress": 0, "ig_total": 0, "ig_progress": 0}
         _sync_jobs[candidato_id].update(kwargs)
+
+def _sync_job_progress_inc(candidato_id: int, plataforma: str):
+    """Incrementa el progreso general y el específico de plataforma."""
+    with _sync_jobs_lock:
+        _sync_jobs[candidato_id]["progress"] = _sync_jobs[candidato_id].get("progress", 0) + 1
+        pk = "fb_progress" if plataforma == "facebook" else "ig_progress"
+        _sync_jobs[candidato_id][pk] = _sync_jobs[candidato_id].get(pk, 0) + 1
 
 def _sync_job_get(candidato_id: int) -> dict:
     with _sync_jobs_lock:
@@ -917,7 +924,8 @@ def sincronizar_candidato(
             fecha_desde = datetime.utcnow() - timedelta(days=30 * meses_historico)
 
         _sync_job_update(candidato_id, state="running", progress=0, total=0,
-                         message="Iniciando...", errors=[])
+                         message="Iniciando...", errors=[],
+                         phase="", fb_total=0, fb_progress=0, ig_total=0, ig_progress=0)
 
         def _run():
             plataformas = []
@@ -998,6 +1006,11 @@ def sincronizar_conversaciones_tarea(
         with _sync_jobs_lock:
             prev_total = _sync_jobs.get(candidato_id, {}).get("total", 0)
             _sync_jobs[candidato_id]["total"] = prev_total + total
+            _sync_jobs[candidato_id]["phase"] = plataforma
+            if plataforma == "facebook":
+                _sync_jobs[candidato_id]["fb_total"] = total
+            else:
+                _sync_jobs[candidato_id]["ig_total"] = total
 
         from backend.sync_conversations import procesar_mensajes_usuario
 
@@ -1015,8 +1028,7 @@ def sincronizar_conversaciones_tarea(
 
                 if not mensajes:
                     print(f"      ⚠️ Sin mensajes")
-                    with _sync_jobs_lock:
-                        _sync_jobs[candidato_id]["progress"] = (_sync_jobs[candidato_id].get("progress", 0) + 1)
+                    _sync_job_progress_inc(candidato_id, plataforma)
                     continue
 
                 # Filtrar mensajes más antiguos que fecha_desde
@@ -1027,8 +1039,7 @@ def sincronizar_conversaciones_tarea(
                 ]
                 if not mensajes:
                     print(f"      ⏩ Todos los mensajes son anteriores a {fecha_desde.date()}, saltando")
-                    with _sync_jobs_lock:
-                        _sync_jobs[candidato_id]["progress"] = (_sync_jobs[candidato_id].get("progress", 0) + 1)
+                    _sync_job_progress_inc(candidato_id, plataforma)
                     continue
 
                 participants = conv.get("participants", {}).get("data", [])
@@ -1041,8 +1052,7 @@ def sincronizar_conversaciones_tarea(
 
                 if not user_participant:
                     print(f"      ⚠️ No se pudo identificar usuario")
-                    with _sync_jobs_lock:
-                        _sync_jobs[candidato_id]["progress"] = (_sync_jobs[candidato_id].get("progress", 0) + 1)
+                    _sync_job_progress_inc(candidato_id, plataforma)
                     continue
 
                 user_id = user_participant.get("id")
@@ -1060,8 +1070,7 @@ def sincronizar_conversaciones_tarea(
                 )
 
                 print(f"      ✅ Procesado: {username or user_id} ({len(mensajes)} mensajes)")
-                with _sync_jobs_lock:
-                    _sync_jobs[candidato_id]["progress"] = (_sync_jobs[candidato_id].get("progress", 0) + 1)
+                _sync_job_progress_inc(candidato_id, plataforma)
 
         print(f"✅ Sincronización de {plataforma} completada para candidato {candidato_id}\n")
 
@@ -1124,6 +1133,34 @@ async def configurar_whatsapp_candidato(
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
+
+
+@app.post("/api/candidatos/{candidato_id}/instagram-token")
+async def actualizar_instagram_token(candidato_id: int, request: Request):
+    """Actualizar el token de acceso de Instagram para un candidato."""
+    try:
+        body = await request.json()
+        instagram_access_token = (body.get("instagram_access_token") or "").strip()
+        if not instagram_access_token:
+            raise HTTPException(status_code=400, detail="Token vacío")
+
+        from backend.database.models import Candidato as CandidatoModel
+        with get_db() as db:
+            candidato_obj = db.query(CandidatoModel).filter(CandidatoModel.id == candidato_id).first()
+            if not candidato_obj:
+                raise HTTPException(status_code=404, detail="Candidato no encontrado")
+            candidato_obj.instagram_access_token = instagram_access_token
+            db.commit()
+
+        return {"success": True, "message": "Token de Instagram actualizado correctamente"}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"❌ Error actualizando token de Instagram: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/api/intereses")
