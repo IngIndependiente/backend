@@ -390,14 +390,15 @@ class MetaAPIClient:
 meta_client = MetaAPIClient()
 
 
-def crear_cliente_candidato(facebook_page_access_token: str) -> MetaAPIClient:
+def crear_cliente_candidato(facebook_page_access_token: str, instagram_token: str = None) -> MetaAPIClient:
     """
     Crear un cliente de Meta API con el token de un candidato específico.
     
     Args:
         facebook_page_access_token: Token de la página del candidato
+        instagram_token: Token de usuario para Instagram Messaging API (IGAAU... o user token)
         
     Returns:
         Instancia de MetaAPIClient configurada con el token del candidato
     """
-    return MetaAPIClient(facebook_token=facebook_page_access_token)
+    return MetaAPIClient(facebook_token=facebook_page_access_token, instagram_token=instagram_token)

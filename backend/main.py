@@ -473,7 +473,8 @@ async def facebook_callback(
         _oauth_sessions[oauth_token] = {
             "pages": pages_info,
             "facebook_user_id": facebook_id,
-            "user_name": user_name
+            "user_name": user_name,
+            "instagram_access_token": user_access_token  # User-level token needed for Instagram Messaging API
         }
         
         from fastapi.responses import HTMLResponse
@@ -560,8 +561,12 @@ async def obtener_oauth_session(token: str):
         raise HTTPException(status_code=404, detail="Sesión OAuth no encontrada o ya utilizada")
     # Soporte tanto para el formato nuevo (dict) como legado (list)
     if isinstance(session, list):
-        return {"pages": session, "facebook_user_id": None}
-    return {"pages": session.get("pages", []), "facebook_user_id": session.get("facebook_user_id")}
+        return {"pages": session, "facebook_user_id": None, "instagram_access_token": None}
+    return {
+        "pages": session.get("pages", []),
+        "facebook_user_id": session.get("facebook_user_id"),
+        "instagram_access_token": session.get("instagram_access_token")
+    }
 
 
 # =============================================================================
@@ -732,6 +737,7 @@ async def conectar_paginas_seleccionadas(request: Request):
         pages = body.get("pages", [])
         email_base = body.get("email_base", "user")
         owner_facebook_user_id = body.get("facebook_user_id")  # Propietario del usuario OAuth
+        instagram_access_token = body.get("instagram_access_token")  # User-level token for Instagram Messaging API
         
         if not pages:
             raise HTTPException(status_code=400, detail="No se proporcionaron páginas para conectar")
@@ -765,7 +771,8 @@ async def conectar_paginas_seleccionadas(request: Request):
                         facebook_token_expiration=datetime.now(),
                         instagram_business_account_id=instagram_id,
                         instagram_username=instagram_username,
-                        owner_facebook_user_id=owner_facebook_user_id
+                        owner_facebook_user_id=owner_facebook_user_id,
+                        instagram_access_token=instagram_access_token
                     )
                     candidatos_actualizados.append({
                         "id": candidato['id'],
@@ -786,7 +793,8 @@ async def conectar_paginas_seleccionadas(request: Request):
                         facebook_token_expiration=datetime.now(),
                         instagram_business_account_id=instagram_id,
                         instagram_username=instagram_username,
-                        owner_facebook_user_id=owner_facebook_user_id
+                        owner_facebook_user_id=owner_facebook_user_id,
+                        instagram_access_token=instagram_access_token
                     )
                     candidatos_creados.append({
                         "id": candidato['id'],
@@ -892,7 +900,10 @@ def sincronizar_candidato(
         if job.get("state") == "running":
             return {"ok": False, "message": "Ya hay una sincronización en curso para este candidato."}
 
-        cliente = crear_cliente_candidato(candidato['facebook_page_access_token'])
+        cliente = crear_cliente_candidato(
+            candidato['facebook_page_access_token'],
+            instagram_token=candidato.get('instagram_access_token')
+        )
         fecha_desde = datetime.utcnow() - timedelta(days=30 * meses_historico)
 
         _sync_job_update(candidato_id, state="running", progress=0, total=0,

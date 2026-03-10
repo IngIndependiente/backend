@@ -26,6 +26,7 @@ class CandidatoService:
         facebook_token_expiration: Optional[datetime] = None,
         instagram_business_account_id: Optional[str] = None,
         instagram_username: Optional[str] = None,
+        instagram_access_token: Optional[str] = None,
         whatsapp_phone_number_id: Optional[str] = None,
         whatsapp_business_account_id: Optional[str] = None,
         whatsapp_phone_number: Optional[str] = None,
@@ -62,6 +63,7 @@ class CandidatoService:
                 'facebook_token_expiration': facebook_token_expiration,
                 'instagram_business_account_id': instagram_business_account_id,
                 'instagram_username': instagram_username,
+                'instagram_access_token': instagram_access_token,
                 'whatsapp_phone_number_id': whatsapp_phone_number_id,
                 'whatsapp_business_account_id': whatsapp_business_account_id,
                 'whatsapp_phone_number': whatsapp_phone_number,
@@ -96,6 +98,7 @@ class CandidatoService:
                     facebook_token_expiration=facebook_token_expiration,
                     instagram_business_account_id=instagram_business_account_id,
                     instagram_username=instagram_username,
+                    instagram_access_token=instagram_access_token,
                     whatsapp_phone_number_id=whatsapp_phone_number_id,
                     whatsapp_business_account_id=whatsapp_business_account_id,
                     whatsapp_phone_number=whatsapp_phone_number,
@@ -179,6 +182,7 @@ class CandidatoService:
                         'facebook_token_expiration': candidato.facebook_token_expiration,
                         'instagram_business_account_id': candidato.instagram_business_account_id,
                         'instagram_username': candidato.instagram_username,
+                        'instagram_access_token': candidato.instagram_access_token,
                         'whatsapp_phone_number_id': candidato.whatsapp_phone_number_id,
                         'whatsapp_business_account_id': candidato.whatsapp_business_account_id,
                         'whatsapp_phone_number': candidato.whatsapp_phone_number,
@@ -242,6 +246,7 @@ class CandidatoService:
         facebook_token_expiration: datetime,
         instagram_business_account_id: Optional[str] = None,
         instagram_username: Optional[str] = None,
+        instagram_access_token: Optional[str] = None,
         owner_facebook_user_id: Optional[str] = None
     ) -> Dict[str, Any]:
         """Actualizar tokens de Facebook/Instagram para un candidato."""
@@ -262,6 +267,8 @@ class CandidatoService:
                 storage.candidatos_df.loc[mask, 'instagram_business_account_id'] = instagram_business_account_id
             if instagram_username:
                 storage.candidatos_df.loc[mask, 'instagram_username'] = instagram_username
+            if instagram_access_token:
+                storage.candidatos_df.loc[mask, 'instagram_access_token'] = instagram_access_token
             if owner_facebook_user_id:
                 storage.candidatos_df.loc[mask, 'owner_facebook_user_id'] = owner_facebook_user_id
             
@@ -285,6 +292,8 @@ class CandidatoService:
                     candidato.instagram_business_account_id = instagram_business_account_id
                 if instagram_username:
                     candidato.instagram_username = instagram_username
+                if instagram_access_token:
+                    candidato.instagram_access_token = instagram_access_token
                 if owner_facebook_user_id:
                     candidato.owner_facebook_user_id = owner_facebook_user_id
                 

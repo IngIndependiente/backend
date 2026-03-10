@@ -172,6 +172,7 @@ class Candidato(Base):
     
     instagram_business_account_id = Column(String(200), nullable=True)
     instagram_username = Column(String(200), nullable=True)
+    instagram_access_token = Column(String(1000), nullable=True)  # User-level token for Instagram Messaging API
     
     # WhatsApp
     whatsapp_phone_number_id = Column(String(200), nullable=True)
