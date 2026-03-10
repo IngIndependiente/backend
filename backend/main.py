@@ -1946,26 +1946,40 @@ def obtener_conversaciones(
 
 
 @app.get("/api/stats")
-def obtener_estadisticas():
-    """Obtener estadísticas generales del sistema."""
+def obtener_estadisticas(owner_facebook_user_id: Optional[str] = Query(None)):
+    """Obtener estadísticas generales del sistema, filtradas por propietario si se indica."""
     if USE_DATAFRAMES:
         from backend.database.dataframe_storage import get_storage
         storage = get_storage()
-        
-        total_personas = len(storage.personas_df)
-        total_conversaciones = len(storage.conversaciones_df)
+
+        personas_df = storage.personas_df
+        conversaciones_df = storage.conversaciones_df
+
+        # Filtrar por candidatos del usuario autenticado
+        if owner_facebook_user_id:
+            candidato_ids = set(CandidatoService.listar_candidatos_por_owner(owner_facebook_user_id))
+            if 'candidato_id' in personas_df.columns:
+                personas_df = personas_df[personas_df['candidato_id'].isin(candidato_ids)]
+            persona_ids = set(personas_df['id'].tolist())
+            if not conversaciones_df.empty and 'persona_id' in conversaciones_df.columns:
+                conversaciones_df = conversaciones_df[conversaciones_df['persona_id'].isin(persona_ids)]
+
+        total_personas = len(personas_df)
+        total_conversaciones = len(conversaciones_df)
         
         # Estadísticas por género
         from collections import Counter
-        generos = storage.personas_df['genero'].fillna("No especificado").tolist()
+        generos = personas_df['genero'].fillna("No especificado").tolist()
         stats_genero = dict(Counter(generos))
         
         # Estadísticas por interés
         stats_intereses = {}
         if not storage.persona_interes_df.empty and not storage.intereses_df.empty:
-            merged = storage.persona_interes_df.merge(storage.intereses_df, left_on='interes_id', right_on='id')
-            intereses_list = merged['categoria'].tolist()
-            stats_intereses = dict(Counter(intereses_list))
+            persona_ids_set = set(personas_df['id'].tolist())
+            rel_df = storage.persona_interes_df[storage.persona_interes_df['persona_id'].isin(persona_ids_set)]
+            if not rel_df.empty:
+                merged = rel_df.merge(storage.intereses_df, left_on='interes_id', right_on='id')
+                stats_intereses = dict(Counter(merged['categoria'].tolist()))
         
         return {
             "total_personas": total_personas,
@@ -1975,13 +1989,22 @@ def obtener_estadisticas():
         }
     else:
         with get_db() as db:
-            total_personas = db.query(Persona).count()
-            total_conversaciones = db.query(Conversacion).count()
+            if owner_facebook_user_id:
+                candidato_ids = CandidatoService.listar_candidatos_por_owner(owner_facebook_user_id)
+                persona_ids = [p.id for p in db.query(Persona.id).filter(Persona.candidato_id.in_(candidato_ids)).all()]
+                total_personas = len(persona_ids)
+                total_conversaciones = db.query(Conversacion).filter(Conversacion.persona_id.in_(persona_ids)).count()
+            else:
+                total_personas = db.query(Persona).count()
+                total_conversaciones = db.query(Conversacion).count()
             
             # Estadísticas por género
             stats_genero = {}
             for genero in config.GENEROS:
-                count = db.query(Persona).filter(Persona.genero == genero).count()
+                if owner_facebook_user_id:
+                    count = db.query(Persona).filter(Persona.genero == genero, Persona.candidato_id.in_(candidato_ids)).count()
+                else:
+                    count = db.query(Persona).filter(Persona.genero == genero).count()
                 stats_genero[genero] = count
             
             # Estadísticas por interés
