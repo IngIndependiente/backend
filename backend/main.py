@@ -117,6 +117,11 @@ class MensajeCreate(BaseModel):
     instagram_id: Optional[str] = None
 
 
+class ReplyRequest(BaseModel):
+    """Modelo para enviar una respuesta manual desde el dashboard."""
+    texto: str
+
+
 class PersonaResponse(BaseModel):
     """Modelo de respuesta para una sesión/persona."""
     id: int  # ID de la persona
@@ -437,7 +442,9 @@ async def facebook_callback(
             db.commit()
         
         # 4. Obtener lista de TODAS las páginas del usuario
-        pages_url = f"https://graph.facebook.com/v18.0/me/accounts?access_token={user_access_token}&fields=id,name,access_token,instagram_business_account{{id,username}}"
+        # tasks field (requires business_management): shows what the user can do on each page.
+        # MANAGE = full admin; ANALYZE/CREATE_CONTENT/MODERATE = limited roles.
+        pages_url = f"https://graph.facebook.com/v18.0/me/accounts?access_token={user_access_token}&fields=id,name,access_token,tasks,instagram_business_account{{id,username}}"
         
         pages_response = requests.get(pages_url)
         pages_response.raise_for_status()
@@ -459,13 +466,21 @@ async def facebook_callback(
             instagram_account = page.get('instagram_business_account')
             instagram_id = instagram_account.get('id') if instagram_account else None
             instagram_username = instagram_account.get('username') if instagram_account else None
-            
+
+            # Verify admin role: MANAGE task indicates full administrator access
+            page_tasks = page.get('tasks', [])
+            is_admin = 'MANAGE' in page_tasks
+            if not is_admin:
+                print(f"[OAuth] ⚠️  Page '{page_name}' ({page_id}): user lacks MANAGE task. Tasks: {page_tasks}")
+
             pages_info.append({
                 "page_id": page_id,
                 "page_name": page_name,
                 "page_access_token": page_access_token,
                 "instagram_id": instagram_id,
-                "instagram_username": instagram_username
+                "instagram_username": instagram_username,
+                "tasks": page_tasks,
+                "is_admin": is_admin
             })
         
         # 4. Guardar páginas en store temporal con token y redirigir al frontend
@@ -1845,6 +1860,125 @@ def obtener_conversacion(analisis_id: int):
                     for texto in mensajes_texto
                 ]
             }
+
+
+@app.post("/api/conversaciones/{analisis_id}/responder")
+def responder_conversacion(analisis_id: int, reply: ReplyRequest):
+    """
+    Enviar una respuesta manual a una conversación desde el dashboard.
+    Soporta Facebook Messenger e Instagram Direct.
+    Guarda el mensaje enviado en la base de datos.
+    """
+    texto = (reply.texto or "").strip()
+    if not texto:
+        raise HTTPException(status_code=400, detail="El texto de la respuesta no puede estar vacío")
+
+    try:
+        if USE_DATAFRAMES:
+            # ── DataFrame mode ──────────────────────────────────────────────
+            analisis = AnalisisService.obtener_por_id(analisis_id)
+            if not analisis:
+                raise HTTPException(status_code=404, detail="Análisis no encontrado")
+            persona = PersonaService.obtener_persona_por_id(analisis['persona_id'])
+            if not persona:
+                raise HTTPException(status_code=404, detail="Persona no encontrada")
+            plataforma = persona.get('plataforma', '')
+            facebook_id = persona.get('facebook_id')
+            instagram_id = persona.get('instagram_id')
+            candidato_id = persona.get('candidato_id')
+            persona_id = analisis['persona_id']
+
+            # Determine recipient
+            if plataforma == 'instagram' and instagram_id:
+                recipient_id = instagram_id
+            elif facebook_id:
+                recipient_id = facebook_id
+                plataforma = 'facebook'
+            else:
+                raise HTTPException(status_code=400, detail="No se encontró ID de destinatario. Solo Facebook Messenger e Instagram Direct son soportados.")
+
+            # Get candidato tokens
+            cliente = meta_client
+            if candidato_id:
+                candidato = CandidatoService.obtener_candidato_por_id(candidato_id)
+                if candidato and candidato.get('facebook_page_access_token'):
+                    cliente = crear_cliente_candidato(
+                        candidato['facebook_page_access_token'],
+                        instagram_token=candidato.get('instagram_access_token')
+                    )
+
+            # Send via Meta API
+            resultado = cliente.enviar_mensaje_simple(recipient_id, texto, plataforma)
+            if not resultado:
+                raise HTTPException(status_code=502, detail="Error al enviar el mensaje a través de la API de Meta")
+
+            # Save sent message
+            ConversacionService.guardar_conversacion(
+                persona_id=persona_id,
+                plataforma=plataforma,
+                mensaje=texto,
+                es_enviado=True,
+                fecha_mensaje=datetime.utcnow()
+            )
+
+        else:
+            # ── SQLAlchemy mode ─────────────────────────────────────────────
+            with get_db() as db:
+                analisis = db.query(Analisis).filter(Analisis.id == analisis_id).first()
+                if not analisis:
+                    raise HTTPException(status_code=404, detail="Análisis no encontrado")
+                persona = analisis.persona
+                if not persona:
+                    raise HTTPException(status_code=404, detail="Persona no encontrada")
+                plataforma = persona.plataforma or ''
+                facebook_id = persona.facebook_id
+                instagram_id = persona.instagram_id
+                candidato_id = persona.candidato_id
+                persona_id = persona.id
+
+                # Determine recipient
+                if plataforma == 'instagram' and instagram_id:
+                    recipient_id = instagram_id
+                elif facebook_id:
+                    recipient_id = facebook_id
+                    plataforma = 'facebook'
+                else:
+                    raise HTTPException(status_code=400, detail="No se encontró ID de destinatario. Solo Facebook Messenger e Instagram Direct son soportados.")
+
+                # Get candidato tokens
+                cliente = meta_client
+                if candidato_id:
+                    candidato = CandidatoService.obtener_candidato_por_id(candidato_id)
+                    if candidato and candidato.get('facebook_page_access_token'):
+                        cliente = crear_cliente_candidato(
+                            candidato['facebook_page_access_token'],
+                            instagram_token=candidato.get('instagram_access_token')
+                        )
+
+                # Send via Meta API
+                resultado = cliente.enviar_mensaje_simple(recipient_id, texto, plataforma)
+                if not resultado:
+                    raise HTTPException(status_code=502, detail="Error al enviar el mensaje a través de la API de Meta")
+
+                # Save sent message (SQLAlchemy requires db as first arg)
+                ConversacionService.guardar_conversacion(
+                    db,
+                    persona_id=persona_id,
+                    plataforma=plataforma,
+                    mensaje=texto,
+                    es_enviado=True,
+                    fecha_mensaje=datetime.utcnow()
+                )
+
+        print(f"✅ Respuesta enviada desde dashboard a {recipient_id} ({plataforma}): '{texto[:50]}...'")
+        return {"ok": True, "message": "Mensaje enviado correctamente", "recipient_id": recipient_id}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"❌ Error enviando respuesta desde dashboard: {e}")
+        import traceback; traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/api/mensajes/procesar")
