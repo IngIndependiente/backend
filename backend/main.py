@@ -264,8 +264,11 @@ async def facebook_login(candidato_email: Optional[str] = Query(None)):
         raise HTTPException(status_code=500, detail="META_APP_ID no configurado")
     
     # Scopes necesarios para multi-tenant
+    # NOTE: business_management is intentionally excluded from the OAuth scope.
+    # Including unapproved advanced permissions can silently suppress other permissions
+    # (like pages_show_list) in Live mode. The tasks field is still requested at the
+    # API call level; if business_management hasn't been granted, the field is simply omitted.
     scopes = [
-        "business_management",
         "pages_show_list",
         "pages_messaging",
         "pages_read_engagement",
@@ -442,10 +445,28 @@ async def facebook_callback(
             db.commit()
         
         # 4. Obtener lista de TODAS las páginas del usuario
+        # First verify what permissions were actually granted
+        perms_url = f"https://graph.facebook.com/v18.0/me/permissions?access_token={user_access_token}"
+        perms_response = requests.get(perms_url)
+        granted_perms = set()
+        if perms_response.ok:
+            for item in perms_response.json().get('data', []):
+                if item.get('status') == 'granted':
+                    granted_perms.add(item.get('permission'))
+        print(f"[OAuth] Permisos otorgados: {granted_perms}")
+
+        if 'pages_show_list' not in granted_perms:
+            from urllib.parse import quote
+            error_msg = quote(
+                "The 'pages_show_list' permission was not granted. "
+                "In the Facebook Login dialog, make sure to grant all requested permissions "
+                "and select at least one Page to connect."
+            )
+            from fastapi.responses import RedirectResponse
+            return RedirectResponse(url=f"{config.FRONTEND_URL}/?oauth_error={error_msg}")
+
         # tasks field (requires business_management): shows the user's role on each page.
-        # MANAGE = full admin; ANALYZE/CREATE_CONTENT/MODERATE = limited roles.
-        # We try with tasks first; if the API returns an error (e.g. business_management not
-        # yet approved), we fall back to the basic fields so the flow always completes.
+        # We try with tasks first; if not available, fall back to basic fields.
         pages_with_tasks_url = (
             f"https://graph.facebook.com/v18.0/me/accounts?access_token={user_access_token}"
             f"&fields=id,name,access_token,tasks,instagram_business_account{{id,username}}"
@@ -458,6 +479,7 @@ async def facebook_callback(
         pages_response = requests.get(pages_with_tasks_url)
         pages_response.raise_for_status()
         pages_data = pages_response.json()
+        print(f"[OAuth] /me/accounts (with tasks) raw: {pages_data}")
 
         # If the API returned an error object (HTTP 200 but with error payload),
         # fall back to the request without the tasks field.
@@ -466,12 +488,18 @@ async def facebook_callback(
             pages_response = requests.get(pages_basic_url)
             pages_response.raise_for_status()
             pages_data = pages_response.json()
+            print(f"[OAuth] /me/accounts (basic) raw: {pages_data}")
 
         pages = pages_data.get('data', [])
 
         if not pages:
             from urllib.parse import quote
-            error_msg = quote("No Facebook Pages were found for this account. Make sure you are an administrator of at least one Page.")
+            error_msg = quote(
+                "No Facebook Pages were found linked to your account. "
+                "This usually means you did not select any Pages in the Facebook Login dialog. "
+                "Please try connecting again and make sure to select your Page when Facebook asks "
+                "which Pages to share with this app."
+            )
             from fastapi.responses import RedirectResponse
             return RedirectResponse(url=f"{config.FRONTEND_URL}/?oauth_error={error_msg}")
         
