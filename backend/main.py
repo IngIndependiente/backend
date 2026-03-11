@@ -3026,10 +3026,12 @@ def procesar_mensaje_whatsapp(phone: str, texto: str, username: str, message_id:
     # Resolver cliente WhatsApp con las credenciales correctas del candidato
     # phone_number_id viene del metadata del webhook (siempre es el del candidato)
     cliente_wsp = whatsapp_client  # fallback al global
+    candidato_id_wsp = None  # ID del candidato dueño del número WA
     if phone_number_id:
         try:
             candidato = CandidatoService.obtener_candidato_por_whatsapp_phone_id(phone_number_id)
             if candidato:
+                candidato_id_wsp = candidato.get('id')
                 from backend.integrations.whatsapp_api import WhatsAppClient
                 access_token = candidato.get('whatsapp_access_token') or candidato.get('access_token') or whatsapp_client.access_token
                 cliente_wsp = WhatsAppClient(
@@ -3037,7 +3039,7 @@ def procesar_mensaje_whatsapp(phone: str, texto: str, username: str, message_id:
                     access_token=access_token,
                     business_account_id=candidato.get('whatsapp_business_account_id')
                 )
-                print(f"[WSP-PROC] Cliente WhatsApp: candidato '{candidato.get('nombre')}' | phone_number_id={phone_number_id}")
+                print(f"[WSP-PROC] Cliente WhatsApp: candidato '{candidato.get('nombre')}' | phone_number_id={phone_number_id} | candidato_id={candidato_id_wsp}")
             else:
                 print(f"[WSP-PROC] ⚠️ No se encontró candidato para phone_number_id={phone_number_id}, usando cliente global")
         except Exception as e_cand:
@@ -3072,10 +3074,19 @@ def procesar_mensaje_whatsapp(phone: str, texto: str, username: str, message_id:
                 datos = {"telefono": phone}
                 if username:
                     datos["nombre_completo"] = username
+                if candidato_id_wsp:
+                    datos["candidato_id"] = candidato_id_wsp
                 persona = PersonaService.crear_o_actualizar_persona(
                     datos=datos,
                     telefono=phone
                 )
+            elif candidato_id_wsp and not persona.get('candidato_id'):
+                # Asignar candidato_id a persona existente que no lo tenga
+                PersonaService.crear_o_actualizar_persona(
+                    datos={"candidato_id": candidato_id_wsp},
+                    telefono=phone
+                )
+                persona['candidato_id'] = candidato_id_wsp
             
             persona_id = persona['id']
             print(f"[WSP-PROC] Persona encontrada/creada | id={persona_id}")
@@ -3121,15 +3132,22 @@ def procesar_mensaje_whatsapp(phone: str, texto: str, username: str, message_id:
                     datos = {"telefono": phone}
                     if username:
                         datos["nombre_completo"] = username
+                    if candidato_id_wsp:
+                        datos["candidato_id"] = candidato_id_wsp
                     persona = PersonaService.crear_o_actualizar_persona(
                         db,
                         datos=datos,
                         telefono=phone
                     )
+                elif candidato_id_wsp and not persona.candidato_id:
+                    # Asignar candidato_id a persona existente que no lo tenga
+                    persona.candidato_id = candidato_id_wsp
+                    db.commit()
+                    db.refresh(persona)
                 
                 persona_id = persona.id
-                print(f"[WSP-PROC] Persona encontrada/creada | id={persona_id}")
-
+                print(f"[WSP-PROC] Persona encontrada/creada | id={persona_id} | candidato_id={persona.candidato_id}")
+                
                 # Si es click en botón, actualizar interés directamente
                 if interes_seleccionado:
                     PersonaService.crear_o_actualizar_persona(
