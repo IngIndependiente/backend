@@ -492,43 +492,14 @@ async def facebook_callback(
 
         pages = pages_data.get('data', [])
 
-        # Fallback: Pages managed through Meta Business Manager don't appear in /me/accounts.
-        # If the list is empty and business_management was granted, query the Business
-        # Manager API directly: /me/businesses → /{biz_id}/owned_pages + client_pages.
-        if not pages and 'business_management' in granted_perms:
-            print("[OAuth] /me/accounts empty — trying Business Manager API as fallback.")
-            biz_url = (
-                f"https://graph.facebook.com/v18.0/me/businesses"
-                f"?access_token={user_access_token}&fields=id,name"
-            )
-            biz_response = requests.get(biz_url)
-            if biz_response.ok:
-                businesses = biz_response.json().get('data', [])
-                print(f"[OAuth] /me/businesses: {[b['name'] for b in businesses]}")
-                for biz in businesses:
-                    biz_id = biz['id']
-                    for endpoint in ['owned_pages', 'client_pages']:
-                        biz_pages_url = (
-                            f"https://graph.facebook.com/v18.0/{biz_id}/{endpoint}"
-                            f"?access_token={user_access_token}"
-                            f"&fields=id,name,access_token,tasks,instagram_business_account{{id,username}}"
-                        )
-                        biz_pages_resp = requests.get(biz_pages_url)
-                        if biz_pages_resp.ok:
-                            biz_data = biz_pages_resp.json()
-                            biz_pages = biz_data.get('data', [])
-                            print(f"[OAuth] {endpoint} for '{biz['name']}': {[p['name'] for p in biz_pages]}")
-                            pages.extend(biz_pages)
-            else:
-                print(f"[OAuth] /me/businesses error: {biz_response.text}")
-
         if not pages:
             from urllib.parse import quote
             error_msg = quote(
-                "No Facebook Pages were found linked to your account. "
-                "If your Page is managed in Meta Business Suite, try logging in with the "
-                "account that owns the Business Manager, or add yourself as a direct Page admin. "
-                "Then reconnect and select your Page in the Facebook Login dialog."
+                "No Facebook Pages were found for your account. "
+                "During the Facebook Login, there is a step titled 'What can [App] access?' or "
+                "'Choose Pages' where you must select which Pages to share. "
+                "Please go to Facebook Settings > Security and Login > Business Integrations, "
+                "remove this app, then reconnect and carefully select your Page in the login dialog."
             )
             from fastapi.responses import RedirectResponse
             return RedirectResponse(url=f"{config.FRONTEND_URL}/?oauth_error={error_msg}")
