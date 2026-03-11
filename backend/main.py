@@ -442,18 +442,38 @@ async def facebook_callback(
             db.commit()
         
         # 4. Obtener lista de TODAS las páginas del usuario
-        # tasks field (requires business_management): shows what the user can do on each page.
+        # tasks field (requires business_management): shows the user's role on each page.
         # MANAGE = full admin; ANALYZE/CREATE_CONTENT/MODERATE = limited roles.
-        pages_url = f"https://graph.facebook.com/v18.0/me/accounts?access_token={user_access_token}&fields=id,name,access_token,tasks,instagram_business_account{{id,username}}"
-        
-        pages_response = requests.get(pages_url)
+        # We try with tasks first; if the API returns an error (e.g. business_management not
+        # yet approved), we fall back to the basic fields so the flow always completes.
+        pages_with_tasks_url = (
+            f"https://graph.facebook.com/v18.0/me/accounts?access_token={user_access_token}"
+            f"&fields=id,name,access_token,tasks,instagram_business_account{{id,username}}"
+        )
+        pages_basic_url = (
+            f"https://graph.facebook.com/v18.0/me/accounts?access_token={user_access_token}"
+            f"&fields=id,name,access_token,instagram_business_account{{id,username}}"
+        )
+
+        pages_response = requests.get(pages_with_tasks_url)
         pages_response.raise_for_status()
         pages_data = pages_response.json()
-        
+
+        # If the API returned an error object (HTTP 200 but with error payload),
+        # fall back to the request without the tasks field.
+        if 'error' in pages_data or not pages_data.get('data'):
+            print(f"[OAuth] tasks field unavailable ({pages_data.get('error', {}).get('message', 'empty data')}), retrying without tasks.")
+            pages_response = requests.get(pages_basic_url)
+            pages_response.raise_for_status()
+            pages_data = pages_response.json()
+
         pages = pages_data.get('data', [])
-        
+
         if not pages:
-            raise HTTPException(status_code=400, detail="No se encontraron páginas administradas por este usuario")
+            from urllib.parse import quote
+            error_msg = quote("No Facebook Pages were found for this account. Make sure you are an administrator of at least one Page.")
+            from fastapi.responses import RedirectResponse
+            return RedirectResponse(url=f"{config.FRONTEND_URL}/?oauth_error={error_msg}")
         
         # 6. Procesar información de cada página
         pages_info = []
@@ -553,12 +573,20 @@ async def facebook_callback(
     except requests.HTTPError as e:
         print(f"❌ Error en OAuth Facebook: {e}")
         print(f"   Respuesta: {e.response.text if hasattr(e, 'response') else 'N/A'}")
-        raise HTTPException(status_code=400, detail=f"Error conectando con Facebook: {str(e)}")
+        from urllib.parse import quote
+        from fastapi.responses import RedirectResponse
+        error_msg = quote(f"Facebook connection error: {e.response.status_code if hasattr(e, 'response') else str(e)}")
+        return RedirectResponse(url=f"{config.FRONTEND_URL}/?oauth_error={error_msg}")
+    except HTTPException:
+        raise  # re-raise intentional HTTP errors (e.g. 403 access denied)
     except Exception as e:
         print(f"❌ Error procesando callback: {e}")
         import traceback
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Error interno: {str(e)}")
+        from urllib.parse import quote
+        from fastapi.responses import RedirectResponse
+        error_msg = quote("Unexpected error during login. Please try again.")
+        return RedirectResponse(url=f"{config.FRONTEND_URL}/?oauth_error={error_msg}")
 
 
 # =============================================================================
