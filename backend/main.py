@@ -280,12 +280,18 @@ async def facebook_login(candidato_email: Optional[str] = Query(None)):
     state = candidato_email if candidato_email else "default"
     
     # URL de autorización de Facebook
+    # enable_profile_selector: forces the page-picker to appear so the user must
+    #   explicitly select which Pages to share (prevents empty /me/accounts).
+    # auth_type=rerequest: forces Facebook to show the full dialog even if the user
+    #   has previously authorized the app, ensuring stale grants are refreshed.
     auth_url = "https://www.facebook.com/v18.0/dialog/oauth?" + urlencode({
         "client_id": config.META_APP_ID,
         "redirect_uri": config.OAUTH_REDIRECT_URI,
         "state": state,
         "scope": ",".join(scopes),
-        "response_type": "code"
+        "response_type": "code",
+        "enable_profile_selector": "true",
+        "auth_type": "rerequest"
     })
     
     # Redirigir al usuario a Facebook
