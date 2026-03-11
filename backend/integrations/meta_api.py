@@ -256,12 +256,15 @@ class MetaAPIClient:
         Returns:
             Lista de conversaciones
         """
-        # Para Instagram, el parámetro platform=instagram es obligatorio
+        # Para Instagram, el parámetro platform=instagram es obligatorio.
+        # Request only id,updated_time in the list call — adding nested fields like
+        # participants{} in the bulk request causes Meta to return 500 when there
+        # are many conversations. Participants are fetched per-conversation instead.
         url = f"{self.instagram_base_url}/{instagram_account_id}/conversations"
         params = {
             "access_token": self.facebook_token,
             "platform": "instagram",
-            "fields": "id,updated_time,participants{id,username,name}",
+            "fields": "id,updated_time",
             "limit": limit
         }
         

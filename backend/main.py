@@ -1016,7 +1016,7 @@ def sincronizar_candidato(
             plataformas = []
             if sincronizar_facebook and candidato.get('facebook_page_id'):
                 plataformas.append(("facebook", candidato['facebook_page_id']))
-            # Instagram conversations via Messenger Platform use the Facebook Page ID, not the IG Business Account ID
+            # Instagram Messaging API via Messenger Platform uses the Facebook Page ID with platform=instagram
             if sincronizar_instagram and candidato.get('facebook_page_id'):
                 plataformas.append(("instagram", candidato['facebook_page_id']))
 
