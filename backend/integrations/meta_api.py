@@ -169,15 +169,17 @@ class MetaAPIClient:
     def obtener_conversaciones_facebook(
         self,
         page_id: str,
-        limit: int = 50
+        limit: int = 50,
+        since: int = None
     ) -> List[Dict[str, Any]]:
         """
         Obtener conversaciones de una página de Facebook.
-        
+
         Args:
             page_id: ID de la página de Facebook
             limit: Número máximo de conversaciones
-            
+            since: Unix timestamp — only return conversations updated after this time
+
         Returns:
             Lista de conversaciones
         """
@@ -187,6 +189,8 @@ class MetaAPIClient:
             "fields": "participants,id,updated_time",
             "limit": limit
         }
+        if since:
+            params["since"] = since
         
         try:
             response = requests.get(url, params=params)
@@ -244,15 +248,17 @@ class MetaAPIClient:
     def obtener_conversaciones_instagram(
         self,
         instagram_account_id: str,
-        limit: int = 50
+        limit: int = 50,
+        since: int = None
     ) -> List[Dict[str, Any]]:
         """
         Obtener conversaciones de Instagram.
-        
+
         Args:
             instagram_account_id: ID de la cuenta de Instagram Business
             limit: Número máximo de conversaciones
-            
+            since: Unix timestamp — only return conversations updated after this time
+
         Returns:
             Lista de conversaciones
         """
@@ -267,6 +273,8 @@ class MetaAPIClient:
             "fields": "id,updated_time",
             "limit": limit
         }
+        if since:
+            params["since"] = since
         
         try:
             response = requests.get(url, params=params)

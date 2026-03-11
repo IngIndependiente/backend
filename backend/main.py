@@ -1073,12 +1073,15 @@ def sincronizar_conversaciones_tarea(
         print(f"\n🔄 Iniciando sincronización de {plataforma} para candidato {candidato_id}")
         print(f"   Page/Account ID: {page_id}")
         print(f"   Límite: {limit} conversaciones | Histórico desde: {fecha_desde.date()}")
+        import calendar as _calendar
+        since_ts = int(_calendar.timegm(fecha_desde.timetuple()))
+        print(f"   Filtrando desde Unix timestamp: {since_ts} ({fecha_desde.date()})")
         _sync_job_update(candidato_id, message=f"Obteniendo conversaciones de {plataforma}…")
 
         if plataforma == "facebook":
-            conversaciones = cliente.obtener_conversaciones_facebook(page_id, limit)
+            conversaciones = cliente.obtener_conversaciones_facebook(page_id, limit, since=since_ts)
         else:
-            conversaciones = cliente.obtener_conversaciones_instagram(page_id, limit)
+            conversaciones = cliente.obtener_conversaciones_instagram(page_id, limit, since=since_ts)
 
         if not conversaciones:
             print(f"⚠️ No se encontraron conversaciones de {plataforma}")
