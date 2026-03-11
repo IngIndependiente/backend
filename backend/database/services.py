@@ -290,3 +290,37 @@ class AnalisisService:
             query = query.filter(Analisis.fecha_analisis <= fecha_fin)
             
         return query.order_by(Analisis.fecha_analisis.desc()).limit(limit).all()
+
+    @staticmethod
+    def obtener_por_id(analisis_id: int, db: Session = None):
+        """Obtener un análisis por su ID."""
+        from backend.database import get_db
+        if db:
+            return db.query(Analisis).filter(Analisis.id == analisis_id).first()
+        with get_db() as session:
+            analisis = session.query(Analisis).filter(Analisis.id == analisis_id).first()
+            if analisis:
+                # Convertir a dict para evitar problemas de sesión cerrada
+                return {
+                    'id': analisis.id,
+                    'persona_id': analisis.persona_id,
+                    'resumen': analisis.resumen,
+                    'contenido_completo': analisis.contenido_completo,
+                    'categorias': analisis.categorias,
+                    'start_conversation': analisis.start_conversation,
+                    'fecha_analisis': analisis.fecha_analisis,
+                    'evento_id': analisis.evento_id
+                }
+            return None
+
+    @staticmethod
+    def actualizar_evento(analisis_id: int, evento_id: Optional[int]):
+        """Actualizar el evento asociado a un análisis."""
+        from backend.database import get_db
+        with get_db() as db:
+            analisis = db.query(Analisis).filter(Analisis.id == analisis_id).first()
+            if analisis:
+                analisis.evento_id = evento_id
+                db.commit()
+                return True
+            return False
