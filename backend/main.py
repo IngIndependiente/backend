@@ -157,6 +157,8 @@ class BusquedaRequest(BaseModel):
     fecha_inicio: Optional[str] = None
     fecha_fin: Optional[str] = None
     facebook_user_id: Optional[str] = None  # Filtrar solo datos del usuario autenticado
+    page: int = 0
+    page_size: int = 50
 
 
 # === Modelos Pydantic para Admin Usuarios ===
@@ -1724,9 +1726,13 @@ def _buscar_personas_impl(busqueda: BusquedaRequest):  # noqa: C901
         "por_interes": dict(Counter(intereses_flat))
     }
     
+    page = max(0, busqueda.page or 0)
+    page_size = max(1, min(busqueda.page_size or 50, 200))
+    total_paginas = max(1, (len(resultado) + page_size - 1) // page_size)
     return {
         "total": len(resultado),
-        "personas": resultado[:100], # Paginación simple
+        "total_paginas": total_paginas,
+        "personas": resultado[page * page_size: (page + 1) * page_size],
         "stats": stats
     }
 
