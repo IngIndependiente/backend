@@ -317,6 +317,7 @@ async def facebook_login(
 
 @app.get("/auth/facebook/callback")
 async def facebook_callback(
+    request: Request,
     code: str = Query(...),
     state: str = Query(None),
     db: Session = Depends(get_db_session)
@@ -526,8 +527,11 @@ async def facebook_callback(
                 retry_state_val = f"{state}|reauth"
                 from urllib.parse import quote as _quote
                 from fastapi.responses import RedirectResponse
+                # Build the retry URL relative to the actual running server so it
+                # works in both local and production environments.
+                base_url = str(request.base_url).rstrip("/")
                 return RedirectResponse(
-                    url=f"{config.BACKEND_URL}/auth/facebook/login"
+                    url=f"{base_url}/auth/facebook/login"
                         f"?force_reauth=true&retry_state={_quote(retry_state_val)}"
                 )
 
