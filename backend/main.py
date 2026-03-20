@@ -255,16 +255,23 @@ def root():
 # === Facebook Login for Business (OAuth 2.0) ===
 
 @app.get("/auth/facebook/login")
-async def facebook_login(candidato_email: Optional[str] = Query(None)):
+async def facebook_login(
+    candidato_email: Optional[str] = Query(None),
+    force_reauth: bool = Query(False),
+    retry_state: Optional[str] = Query(None)
+):
     """
     Iniciar flujo de Facebook Login for Business.
-    
+
     Query Params:
-        candidato_email: Email del candidato que está conectando su página
+        candidato_email: Email del candidato que está conectando su página.
+        force_reauth: Si True, usa auth_type=reauthenticate para forzar un
+            login completamente nuevo (útil cuando /me/accounts devuelve vacío).
+        retry_state: Estado codificado pasado en reintentos automáticos.
     """
     if not config.META_APP_ID:
         raise HTTPException(status_code=500, detail="META_APP_ID no configurado")
-    
+
     # Scopes necesarios para multi-tenant
     # NOTE: business_management is intentionally excluded from the OAuth scope.
     # Including unapproved advanced permissions can silently suppress other permissions
@@ -277,26 +284,33 @@ async def facebook_login(candidato_email: Optional[str] = Query(None)):
         "instagram_basic",
         "instagram_manage_messages"
     ]
-    
-    # Estado (puede incluir el email del candidato)
-    state = candidato_email if candidato_email else "default"
-    
+
+    # State: use retry_state if provided (auto-retry path), else build fresh state
+    state = retry_state if retry_state else (candidato_email if candidato_email else "default")
+
     # URL de autorización de Facebook
-    # enable_profile_selector: forces the page-picker to appear so the user must
-    #   explicitly select which Pages to share (prevents empty /me/accounts).
-    # auth_type=rerequest: forces Facebook to show the full dialog even if the user
-    #   has previously authorized the app, ensuring stale grants are refreshed.
-    auth_url = "https://www.facebook.com/v18.0/dialog/oauth?" + urlencode({
+    # NOTE: auth_type=rerequest and enable_profile_selector conflict:
+    # rerequest re-shows the permissions dialog but reuses the stored page
+    # selection (which can be empty), effectively bypassing the page picker.
+    # We therefore do NOT include auth_type=rerequest in the default flow so
+    # Facebook always shows the full dialog including the page-picker.
+    # On force_reauth we use auth_type=reauthenticate for a complete fresh start.
+    params = {
         "client_id": config.META_APP_ID,
         "redirect_uri": config.OAUTH_REDIRECT_URI,
         "state": state,
         "scope": ",".join(scopes),
         "response_type": "code",
         "enable_profile_selector": "true",
-        "auth_type": "rerequest"
-    })
-    
-    # Redirigir al usuario a Facebook
+    }
+    if force_reauth:
+        # Complete fresh login — forces re-authentication and re-page-selection.
+        # Do NOT combine with enable_profile_selector (they conflict on reauthenticate).
+        params["auth_type"] = "reauthenticate"
+        del params["enable_profile_selector"]
+
+    auth_url = "https://www.facebook.com/v18.0/dialog/oauth?" + urlencode(params)
+
     from fastapi.responses import RedirectResponse
     return RedirectResponse(url=auth_url)
 
@@ -475,13 +489,14 @@ async def facebook_callback(
 
         # tasks field (requires business_management): shows the user's role on each page.
         # We try with tasks first; if not available, fall back to basic fields.
+        # limit=100 ensures we retrieve all pages without pagination issues.
         pages_with_tasks_url = (
             f"https://graph.facebook.com/v18.0/me/accounts?access_token={user_access_token}"
-            f"&fields=id,name,access_token,tasks,instagram_business_account{{id,username}}"
+            f"&fields=id,name,access_token,tasks,instagram_business_account{{id,username}}&limit=100"
         )
         pages_basic_url = (
             f"https://graph.facebook.com/v18.0/me/accounts?access_token={user_access_token}"
-            f"&fields=id,name,access_token,instagram_business_account{{id,username}}"
+            f"&fields=id,name,access_token,instagram_business_account{{id,username}}&limit=100"
         )
 
         pages_response = requests.get(pages_with_tasks_url)
@@ -491,8 +506,8 @@ async def facebook_callback(
 
         # If the API returned an error object (HTTP 200 but with error payload),
         # fall back to the request without the tasks field.
-        if 'error' in pages_data or not pages_data.get('data'):
-            print(f"[OAuth] tasks field unavailable ({pages_data.get('error', {}).get('message', 'empty data')}), retrying without tasks.")
+        if 'error' in pages_data:
+            print(f"[OAuth] tasks field unavailable ({pages_data.get('error', {}).get('message', 'no error detail')}), retrying without tasks.")
             pages_response = requests.get(pages_basic_url)
             pages_response.raise_for_status()
             pages_data = pages_response.json()
@@ -501,13 +516,28 @@ async def facebook_callback(
         pages = pages_data.get('data', [])
 
         if not pages:
+            # If this is already a reauth retry, show a descriptive error.
+            is_retry = state and state.endswith("|reauth")
+            if not is_retry:
+                # Auto-retry: redirect to a completely fresh login (reauthenticate)
+                # so Facebook shows the full dialog including the page-picker.
+                print(f"[OAuth] /me/accounts returned 0 pages despite pages_show_list granted. "
+                      f"Auto-retrying with force_reauth. state={state!r}")
+                retry_state_val = f"{state}|reauth"
+                from urllib.parse import quote as _quote
+                from fastapi.responses import RedirectResponse
+                return RedirectResponse(
+                    url=f"{config.BACKEND_URL}/auth/facebook/login"
+                        f"?force_reauth=true&retry_state={_quote(retry_state_val)}"
+                )
+
+            # Second attempt still empty → genuine problem, show actionable error.
             from urllib.parse import quote
             error_msg = quote(
-                "No Facebook Pages were found for your account. "
-                "During the Facebook Login, there is a step titled 'What can [App] access?' or "
-                "'Choose Pages' where you must select which Pages to share. "
-                "Please go to Facebook Settings > Security and Login > Business Integrations, "
-                "remove this app, then reconnect and carefully select your Page in the login dialog."
+                "No se encontraron páginas de Facebook asociadas a tu cuenta. "
+                "Posibles causas: (1) No eres Administrador de la página (solo admins aparecen en /me/accounts). "
+                "(2) La página está gestionada por un Business Manager del que no eres admin directo. "
+                "Verifica en Facebook Settings > Pages que tienes rol de Administrador."
             )
             from fastapi.responses import RedirectResponse
             return RedirectResponse(url=f"{config.FRONTEND_URL}/?oauth_error={error_msg}")
