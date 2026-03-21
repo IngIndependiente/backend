@@ -83,6 +83,10 @@ from urllib.parse import urlencode
 # Se limpia en /api/oauth-session/{token} o en el siguiente login
 _oauth_sessions: dict = {}
 
+# Diagnóstico: guarda el último user_access_token procesado en el callback
+# SOLO para depuración vía /api/debug/facebook-pages — se sobreescribe en cada login
+_last_oauth_debug: dict = {}
+
 # Imports condicionales para SQLAlchemy
 if not USE_DATAFRAMES:
     from backend.database.models import Persona, Interes, Conversacion, Analisis, Evento
@@ -309,7 +313,7 @@ async def facebook_login(
         params["auth_type"] = "reauthenticate"
         del params["enable_profile_selector"]
 
-    auth_url = "https://www.facebook.com/v18.0/dialog/oauth?" + urlencode(params)
+    auth_url = "https://www.facebook.com/v21.0/dialog/oauth?" + urlencode(params)
 
     from fastapi.responses import RedirectResponse
     return RedirectResponse(url=auth_url)
@@ -332,7 +336,7 @@ async def facebook_callback(
     
     try:
         # 1. Intercambiar código por access token
-        token_url = "https://graph.facebook.com/v18.0/oauth/access_token?" + urlencode({
+        token_url = "https://graph.facebook.com/v21.0/oauth/access_token?" + urlencode({
             "client_id": config.META_APP_ID,
             "client_secret": config.META_APP_SECRET,
             "redirect_uri": config.OAUTH_REDIRECT_URI,
@@ -346,7 +350,7 @@ async def facebook_callback(
         user_access_token = token_data['access_token']
         
         # 2. OBTENER EMAIL DEL USUARIO DE FACEBOOK
-        user_url = f"https://graph.facebook.com/v18.0/me?access_token={user_access_token}&fields=id,name,email"
+        user_url = f"https://graph.facebook.com/v21.0/me?access_token={user_access_token}&fields=id,name,email"
         user_response = requests.get(user_url)
         user_response.raise_for_status()
         user_data = user_response.json()
@@ -469,13 +473,18 @@ async def facebook_callback(
         
         # 4. Obtener lista de TODAS las páginas del usuario
         # First verify what permissions were actually granted
-        perms_url = f"https://graph.facebook.com/v18.0/me/permissions?access_token={user_access_token}"
+        perms_url = f"https://graph.facebook.com/v21.0/me/permissions?access_token={user_access_token}"
+
+        # Guardar token para diagnóstico (sobreescribe, solo el último)
+        _last_oauth_debug["user_access_token"] = user_access_token
+        _last_oauth_debug["facebook_id"] = None  # se completa más abajo
         perms_response = requests.get(perms_url)
         granted_perms = set()
         if perms_response.ok:
             for item in perms_response.json().get('data', []):
                 if item.get('status') == 'granted':
                     granted_perms.add(item.get('permission'))
+        _last_oauth_debug["facebook_id"] = facebook_id
         print(f"[OAuth] Permisos otorgados: {granted_perms}")
 
         if 'pages_show_list' not in granted_perms:
@@ -492,11 +501,11 @@ async def facebook_callback(
         # We try with tasks first; if not available, fall back to basic fields.
         # limit=100 ensures we retrieve all pages without pagination issues.
         pages_with_tasks_url = (
-            f"https://graph.facebook.com/v18.0/me/accounts?access_token={user_access_token}"
+            f"https://graph.facebook.com/v21.0/me/accounts?access_token={user_access_token}"
             f"&fields=id,name,access_token,tasks,instagram_business_account{{id,username}}&limit=100"
         )
         pages_basic_url = (
-            f"https://graph.facebook.com/v18.0/me/accounts?access_token={user_access_token}"
+            f"https://graph.facebook.com/v21.0/me/accounts?access_token={user_access_token}"
             f"&fields=id,name,access_token,instagram_business_account{{id,username}}&limit=100"
         )
 
@@ -2311,6 +2320,57 @@ def debug_logs(n: int = 200):
     """Devuelve las últimas N líneas del log en memoria."""
     lines = list(_LOG_BUFFER)[-n:]
     return {"total": len(_LOG_BUFFER), "lines": lines}
+
+
+@app.get("/api/debug/facebook-pages")
+def debug_facebook_pages(access_token: Optional[str] = Query(None)):
+    """
+    Diagnóstico OAuth: llama directamente a /me/accounts y /me/permissions
+    usando el último user_access_token capturado en el callback, o el token
+    proporcionado manualmente como query param ?access_token=...
+    """
+    token = access_token or _last_oauth_debug.get("user_access_token")
+    if not token:
+        return {"error": "No hay token disponible. Completa el flujo OAuth al menos una vez, o pasa ?access_token=TU_TOKEN"}
+
+    base = "https://graph.facebook.com/v21.0"
+    result = {"facebook_id": _last_oauth_debug.get("facebook_id"), "token_prefix": token[:12] + "..."}
+
+    # Permisos concedidos
+    try:
+        r = requests.get(f"{base}/me/permissions?access_token={token}", timeout=10)
+        result["permissions"] = r.json()
+    except Exception as e:
+        result["permissions_error"] = str(e)
+
+    # /me básico
+    try:
+        r = requests.get(f"{base}/me?fields=id,name&access_token={token}", timeout=10)
+        result["me"] = r.json()
+    except Exception as e:
+        result["me_error"] = str(e)
+
+    # /me/accounts CON tasks
+    try:
+        r = requests.get(
+            f"{base}/me/accounts?fields=id,name,tasks,instagram_business_account{{id,username}}&limit=100&access_token={token}",
+            timeout=10
+        )
+        result["accounts_with_tasks"] = r.json()
+    except Exception as e:
+        result["accounts_with_tasks_error"] = str(e)
+
+    # /me/accounts básico
+    try:
+        r = requests.get(
+            f"{base}/me/accounts?fields=id,name&limit=100&access_token={token}",
+            timeout=10
+        )
+        result["accounts_basic"] = r.json()
+    except Exception as e:
+        result["accounts_basic_error"] = str(e)
+
+    return result
 
 
 @app.get("/api/debug/status")
