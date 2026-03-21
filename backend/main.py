@@ -77,6 +77,8 @@ from backend.integrations.meta_api import meta_client, crear_cliente_candidato
 from backend.integrations.whatsapp_api import whatsapp_client
 import requests
 import uuid
+import hashlib
+import hmac as _hmac
 from urllib.parse import urlencode
 
 # Store temporal para sesiones OAuth (pages pendientes de confirmar)
@@ -257,8 +259,23 @@ def root():
 
 
 # ─── Fallback HTML form: user enters their Page ID/URL manually (NPE workaround) ───
-def _render_page_id_form(session_token: str, error: str = None) -> str:
-    """Returns HTML with a form for manual Facebook Page ID entry."""
+
+def _sign_token(token: str) -> str:
+    """HMAC-sign the user access token so we can pass it safely through the form."""
+    secret = (config.META_APP_SECRET or "").encode()
+    return _hmac.new(secret, token.encode(), hashlib.sha256).hexdigest()
+
+
+def _render_page_id_form(
+    user_access_token: str,
+    facebook_id: str,
+    user_name: str,
+    error: str = None,
+) -> str:
+    """Returns HTML with a form for manual Facebook Page ID entry.
+    The token travels as a signed hidden field — no server-side session needed.
+    """
+    sig = _sign_token(user_access_token)
     error_html = (
         f'<div style="color:#842029;background:#f8d7da;border:1px solid #f5c2c7;'
         f'border-radius:8px;padding:12px 16px;margin-bottom:16px;">⚠️ {error}</div>'
@@ -271,7 +288,7 @@ def _render_page_id_form(session_token: str, error: str = None) -> str:
         'body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;'
         'display:flex;justify-content:center;align-items:center;min-height:100vh;margin:0;'
         'background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);}'
-        '.card{background:#fff;border-radius:16px;padding:40px;max-width:500px;width:90%;'
+        '.card{background:#fff;border-radius:16px;padding:40px;max-width:520px;width:90%;'
         'box-shadow:0 20px 60px rgba(0,0,0,.3);}'
         'h2{margin:0 0 8px;color:#1877f2;font-size:1.5rem;}'
         'p{color:#555;line-height:1.6;margin:8px 0 20px;}'
@@ -284,12 +301,15 @@ def _render_page_id_form(session_token: str, error: str = None) -> str:
         '.hint{font-size:.82rem;color:#888;margin-top:16px;border-top:1px solid #f0f0f0;padding-top:16px;}'
         '</style></head><body><div class="card">'
         '<h2>&#128196; Conectar página de Facebook</h2>'
-        '<p>Tu página no pudo detectarse automáticamente (problema conocido del '
+        '<p>Tu página no pudo detectarse automáticamente (limitación del '
         '<strong>Nuevo Diseño de Páginas</strong> de Facebook).<br>'
-        'Por favor ingresa la URL o el ID de tu página:</p>'
+        'Ingresa la URL o el ID numérico de tu página:</p>'
         + error_html +
         '<form action="/auth/facebook/page-lookup" method="get">'
-        f'<input type="hidden" name="session_token" value="{session_token}">'
+        f'<input type="hidden" name="uat" value="{user_access_token}">'
+        f'<input type="hidden" name="sig" value="{sig}">'
+        f'<input type="hidden" name="fbid" value="{facebook_id or ""}">'
+        f'<input type="hidden" name="uname" value="{user_name or ""}">'
         '<input type="text" name="page_ref" '
         'placeholder="https://www.facebook.com/mipagina  ó  123456789" required autofocus>'
         '<button type="submit">Conectar página &#8594;</button>'
@@ -330,10 +350,11 @@ async def facebook_login(
         "pages_show_list",
         "pages_messaging",
         "pages_read_engagement",
-        "pages_manage_metadata",   # Required for New Pages Experience (NPE) pages to appear in /me/accounts
         "instagram_basic",
         "instagram_manage_messages"
     ]
+    # NOTE: pages_manage_metadata was previously here but requires Meta App Review
+    # for Live-mode apps and caused silent permission failures. Removed.
 
     # State: use retry_state if provided (auto-retry path), else build fresh state
     state = retry_state if retry_state else (candidato_email if candidato_email else "default")
@@ -394,6 +415,29 @@ async def facebook_callback(
         token_data = token_response.json()
         
         user_access_token = token_data['access_token']
+
+        # 1b. Exchange short-lived token for a long-lived one (60-day).
+        # Long-lived tokens are required for NPE (New Pages Experience) pages
+        # to properly resolve page admin relationships via the Graph API.
+        try:
+            ll_url = "https://graph.facebook.com/v21.0/oauth/access_token?" + urlencode({
+                "grant_type": "fb_exchange_token",
+                "client_id": config.META_APP_ID,
+                "client_secret": config.META_APP_SECRET,
+                "fb_exchange_token": user_access_token,
+            })
+            ll_resp = requests.get(ll_url, timeout=10)
+            if ll_resp.ok:
+                ll_data = ll_resp.json()
+                if "access_token" in ll_data:
+                    user_access_token = ll_data["access_token"]
+                    print(f"[OAuth] Exchanged for long-lived token (expires_in={ll_data.get('expires_in', '?')}s)")
+                else:
+                    print(f"[OAuth] long-lived exchange returned no token: {ll_data}")
+            else:
+                print(f"[OAuth] long-lived exchange failed ({ll_resp.status_code}): {ll_resp.text[:200]}")
+        except Exception as _e:
+            print(f"[OAuth] long-lived exchange error (non-fatal): {_e}")
         
         # 2. OBTENER EMAIL DEL USUARIO DE FACEBOOK
         user_url = f"https://graph.facebook.com/v21.0/me?access_token={user_access_token}&fields=id,name,email"
@@ -588,15 +632,10 @@ async def facebook_callback(
             # Known issue with New Pages Experience (NPE). Serve a manual-entry form.
             print(f"[OAuth] All /me/accounts attempts returned empty for user {facebook_id}. "
                   f"Serving manual page-ID form. granted_perms={granted_perms}")
-            session_token = str(uuid.uuid4())
-            _oauth_sessions[session_token] = {
-                "user_access_token": user_access_token,
-                "facebook_id": facebook_id,
-                "user_name": user_name,
-                "needs_page_id": True,
-            }
             from fastapi.responses import HTMLResponse
-            return HTMLResponse(content=_render_page_id_form(session_token))
+            return HTMLResponse(content=_render_page_id_form(
+                user_access_token, facebook_id, user_name
+            ))
 
         # 6. Procesar información de cada página
         pages_info = []
@@ -716,27 +755,31 @@ async def facebook_callback(
 
 @app.get("/auth/facebook/page-lookup")
 async def facebook_page_lookup(
-    session_token: str = Query(...),
-    page_ref: str = Query(...)
+    uat: str = Query(...),   # user access token (long-lived)
+    sig: str = Query(...),   # HMAC signature of uat
+    page_ref: str = Query(...),
+    fbid: str = Query(""),
+    uname: str = Query(""),
 ):
     """
     NPE fallback: the user types their Page URL or ID and we fetch it directly
-    using the user_access_token stored in the temporary OAuth session.
+    using the user_access_token passed as a signed hidden field.
+    The token is HMAC-verified with META_APP_SECRET before use.
     """
     import re
     from fastapi.responses import HTMLResponse, RedirectResponse
     from urllib.parse import quote
 
-    session = _oauth_sessions.get(session_token)
-    if not session or not session.get("needs_page_id"):
+    # Verify HMAC signature to prevent token tampering
+    expected_sig = _sign_token(uat)
+    if not _hmac.compare_digest(expected_sig, sig):
         return RedirectResponse(
-            f"{config.FRONTEND_URL}/?oauth_error="
-            + quote("Sesión expirada. Por favor vuelve a conectar Facebook.")
+            f"{config.FRONTEND_URL}/?oauth_error=" + quote("Firma inválida. Por favor vuelve a conectar Facebook.")
         )
 
-    user_access_token = session["user_access_token"]
-    facebook_id = session["facebook_id"]
-    user_name = session["user_name"]
+    user_access_token = uat
+    facebook_id = fbid or None
+    user_name = uname or None
 
     # Normalize: extract slug/numeric-ID from a full Facebook URL if provided
     page_ref = page_ref.strip().rstrip("/")
@@ -747,10 +790,11 @@ async def facebook_page_lookup(
 
     if not re.match(r"^[A-Za-z0-9._@\-]+$", page_ref) or len(page_ref) < 3:
         return HTMLResponse(_render_page_id_form(
-            session_token, "El ID o URL ingresado no es válido. Inténtalo de nuevo."
+            user_access_token, facebook_id, user_name,
+            "El ID o URL ingresado no es válido. Inténtalo de nuevo."
         ))
 
-    # Fetch the specific page using the user token
+    # Fetch the specific page using the long-lived user token
     r = requests.get(
         f"https://graph.facebook.com/v21.0/{page_ref}"
         "?fields=id,name,access_token,instagram_business_account{id,username}"
@@ -761,19 +805,40 @@ async def facebook_page_lookup(
     print(f"[OAuth] page-lookup {page_ref!r}: status={r.status_code} data={page_data}")
 
     if "error" in page_data:
-        err = page_data["error"].get("message", "No se pudo obtener la información de la página.")
-        return HTMLResponse(_render_page_id_form(session_token, err))
+        err_msg = page_data["error"].get("message", "No se pudo obtener la información de la página.")
+        err_code = page_data["error"].get("code", "?")
+        return HTMLResponse(_render_page_id_form(
+            user_access_token, facebook_id, user_name,
+            f"Error de Facebook (código {err_code}): {err_msg}"
+        ))
 
     if "id" not in page_data:
         return HTMLResponse(_render_page_id_form(
-            session_token, "No se encontró la página. Verifica el ID o URL e inténtalo de nuevo."
+            user_access_token, facebook_id, user_name,
+            "No se encontró la página. Verifica el ID o URL e inténtalo de nuevo."
         ))
 
     if "access_token" not in page_data:
-        return HTMLResponse(_render_page_id_form(
-            session_token,
-            "No tienes rol de Administrador en esa página, o no está vinculada a tu cuenta de Facebook."
-        ))
+        # Try getting an explicit page token via /{user_id}/accounts?page_id filter as last resort
+        page_token = None
+        if facebook_id:
+            acct_r = requests.get(
+                f"https://graph.facebook.com/v21.0/{facebook_id}/accounts"
+                f"?fields=id,name,access_token&limit=100&access_token={user_access_token}",
+                timeout=10,
+            )
+            if acct_r.ok:
+                for p in acct_r.json().get("data", []):
+                    if p.get("id") == page_data["id"]:
+                        page_token = p.get("access_token")
+                        break
+        if not page_token:
+            return HTMLResponse(_render_page_id_form(
+                user_access_token, facebook_id, user_name,
+                "Facebook no devuelvió un token de acceso para esta página. "
+                "Asegúrate de ser <strong>Administrador</strong> de la página (no Editor ni otro rol)."
+            ))
+        page_data["access_token"] = page_token
 
     ig = page_data.get("instagram_business_account") or {}
     pages_info = [{
@@ -793,7 +858,6 @@ async def facebook_page_lookup(
         "user_name": user_name,
         "instagram_access_token": user_access_token,
     }
-    del _oauth_sessions[session_token]
 
     redirect_html = (
         '<!DOCTYPE html><html><head><title>Conectando...</title><style>'
@@ -807,9 +871,8 @@ async def facebook_page_lookup(
         '</style></head><body><div class="container">'
         '<div class="spinner"></div><h2>&#10003; Página conectada!</h2>'
         '<p>Redirigiendo al dashboard...</p></div>'
-        '<script>setTimeout(()=>{window.location.href='
-        f"'{config.FRONTEND_URL}/?oauth_token={oauth_token}'"
-        ';},1000);</script></body></html>'
+        f'<script>setTimeout(()=>{{window.location.href="{config.FRONTEND_URL}/?oauth_token={oauth_token}";}},1000);</script>'
+        '</body></html>'
     )
     return HTMLResponse(content=redirect_html)
 
