@@ -256,6 +256,51 @@ def root():
     }
 
 
+# ─── Fallback HTML form: user enters their Page ID/URL manually (NPE workaround) ───
+def _render_page_id_form(session_token: str, error: str = None) -> str:
+    """Returns HTML with a form for manual Facebook Page ID entry."""
+    error_html = (
+        f'<div style="color:#842029;background:#f8d7da;border:1px solid #f5c2c7;'
+        f'border-radius:8px;padding:12px 16px;margin-bottom:16px;">⚠️ {error}</div>'
+    ) if error else ""
+    return (
+        '<!DOCTYPE html><html lang="es"><head>'
+        '<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
+        '<title>Conectar página de Facebook</title>'
+        '<style>'
+        'body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;'
+        'display:flex;justify-content:center;align-items:center;min-height:100vh;margin:0;'
+        'background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);}'
+        '.card{background:#fff;border-radius:16px;padding:40px;max-width:500px;width:90%;'
+        'box-shadow:0 20px 60px rgba(0,0,0,.3);}'
+        'h2{margin:0 0 8px;color:#1877f2;font-size:1.5rem;}'
+        'p{color:#555;line-height:1.6;margin:8px 0 20px;}'
+        'input[type=text]{width:100%;border:1.5px solid #ddd;border-radius:8px;padding:12px 14px;'
+        'font-size:1rem;box-sizing:border-box;margin-bottom:16px;}'
+        'input[type=text]:focus{outline:none;border-color:#1877f2;}'
+        'button{width:100%;background:#1877f2;color:#fff;border:none;border-radius:8px;'
+        'padding:13px;font-size:1rem;font-weight:600;cursor:pointer;}'
+        'button:hover{background:#166fe5;}'
+        '.hint{font-size:.82rem;color:#888;margin-top:16px;border-top:1px solid #f0f0f0;padding-top:16px;}'
+        '</style></head><body><div class="card">'
+        '<h2>&#128196; Conectar página de Facebook</h2>'
+        '<p>Tu página no pudo detectarse automáticamente (problema conocido del '
+        '<strong>Nuevo Diseño de Páginas</strong> de Facebook).<br>'
+        'Por favor ingresa la URL o el ID de tu página:</p>'
+        + error_html +
+        '<form action="/auth/facebook/page-lookup" method="get">'
+        f'<input type="hidden" name="session_token" value="{session_token}">'
+        '<input type="text" name="page_ref" '
+        'placeholder="https://www.facebook.com/mipagina  ó  123456789" required autofocus>'
+        '<button type="submit">Conectar página &#8594;</button>'
+        '</form>'
+        '<div class="hint">&#128161; Puedes encontrar el ID en:<br>'
+        'Facebook &#8594; Tu Página &#8594; <strong>Configuración</strong> '
+        '&#8594; Información de la Página &#8594; <em>ID de la Página</em></div>'
+        '</div></body></html>'
+    )
+
+
 # === Facebook Login for Business (OAuth 2.0) ===
 
 @app.get("/auth/facebook/login")
@@ -539,35 +584,20 @@ async def facebook_callback(
             pages = alt_data.get('data', [])
 
         if not pages:
-            # If this is already a reauth retry, show a descriptive error.
-            is_retry = state and state.endswith("|reauth")
-            if not is_retry:
-                # Auto-retry: redirect to a completely fresh login (reauthenticate)
-                # so Facebook shows the full dialog including the page-picker.
-                print(f"[OAuth] /me/accounts returned 0 pages despite pages_show_list granted. "
-                      f"Auto-retrying with force_reauth. state={state!r}")
-                retry_state_val = f"{state}|reauth"
-                from urllib.parse import quote as _quote
-                from fastapi.responses import RedirectResponse
-                # Build the retry URL relative to the actual running server so it
-                # works in both local and production environments.
-                base_url = str(request.base_url).rstrip("/")
-                return RedirectResponse(
-                    url=f"{base_url}/auth/facebook/login"
-                        f"?force_reauth=true&retry_state={_quote(retry_state_val)}"
-                )
+            # /me/accounts returned empty despite pages_show_list being granted.
+            # Known issue with New Pages Experience (NPE). Serve a manual-entry form.
+            print(f"[OAuth] All /me/accounts attempts returned empty for user {facebook_id}. "
+                  f"Serving manual page-ID form. granted_perms={granted_perms}")
+            session_token = str(uuid.uuid4())
+            _oauth_sessions[session_token] = {
+                "user_access_token": user_access_token,
+                "facebook_id": facebook_id,
+                "user_name": user_name,
+                "needs_page_id": True,
+            }
+            from fastapi.responses import HTMLResponse
+            return HTMLResponse(content=_render_page_id_form(session_token))
 
-            # Second attempt still empty → genuine problem, show actionable error.
-            from urllib.parse import quote
-            error_msg = quote(
-                "No se encontraron páginas de Facebook asociadas a tu cuenta. "
-                "Posibles causas: (1) No eres Administrador de la página (solo admins aparecen en /me/accounts). "
-                "(2) La página está gestionada por un Business Manager del que no eres admin directo. "
-                "Verifica en Facebook Settings > Pages que tienes rol de Administrador."
-            )
-            from fastapi.responses import RedirectResponse
-            return RedirectResponse(url=f"{config.FRONTEND_URL}/?oauth_error={error_msg}")
-        
         # 6. Procesar información de cada página
         pages_info = []
         for page in pages:
@@ -680,6 +710,108 @@ async def facebook_callback(
         from fastapi.responses import RedirectResponse
         error_msg = quote("Unexpected error during login. Please try again.")
         return RedirectResponse(url=f"{config.FRONTEND_URL}/?oauth_error={error_msg}")
+
+
+# === Fallback manual page lookup for New Pages Experience (NPE) ===
+
+@app.get("/auth/facebook/page-lookup")
+async def facebook_page_lookup(
+    session_token: str = Query(...),
+    page_ref: str = Query(...)
+):
+    """
+    NPE fallback: the user types their Page URL or ID and we fetch it directly
+    using the user_access_token stored in the temporary OAuth session.
+    """
+    import re
+    from fastapi.responses import HTMLResponse, RedirectResponse
+    from urllib.parse import quote
+
+    session = _oauth_sessions.get(session_token)
+    if not session or not session.get("needs_page_id"):
+        return RedirectResponse(
+            f"{config.FRONTEND_URL}/?oauth_error="
+            + quote("Sesión expirada. Por favor vuelve a conectar Facebook.")
+        )
+
+    user_access_token = session["user_access_token"]
+    facebook_id = session["facebook_id"]
+    user_name = session["user_name"]
+
+    # Normalize: extract slug/numeric-ID from a full Facebook URL if provided
+    page_ref = page_ref.strip().rstrip("/")
+    url_match = re.search(r"facebook\.com/(?:profile\.php\?id=)?([A-Za-z0-9._@\-]+)", page_ref)
+    if url_match:
+        page_ref = url_match.group(1)
+    page_ref = page_ref.split("?")[0].split("#")[0]
+
+    if not re.match(r"^[A-Za-z0-9._@\-]+$", page_ref) or len(page_ref) < 3:
+        return HTMLResponse(_render_page_id_form(
+            session_token, "El ID o URL ingresado no es válido. Inténtalo de nuevo."
+        ))
+
+    # Fetch the specific page using the user token
+    r = requests.get(
+        f"https://graph.facebook.com/v21.0/{page_ref}"
+        "?fields=id,name,access_token,instagram_business_account{id,username}"
+        f"&access_token={user_access_token}",
+        timeout=10,
+    )
+    page_data = r.json() if r.ok else {}
+    print(f"[OAuth] page-lookup {page_ref!r}: status={r.status_code} data={page_data}")
+
+    if "error" in page_data:
+        err = page_data["error"].get("message", "No se pudo obtener la información de la página.")
+        return HTMLResponse(_render_page_id_form(session_token, err))
+
+    if "id" not in page_data:
+        return HTMLResponse(_render_page_id_form(
+            session_token, "No se encontró la página. Verifica el ID o URL e inténtalo de nuevo."
+        ))
+
+    if "access_token" not in page_data:
+        return HTMLResponse(_render_page_id_form(
+            session_token,
+            "No tienes rol de Administrador en esa página, o no está vinculada a tu cuenta de Facebook."
+        ))
+
+    ig = page_data.get("instagram_business_account") or {}
+    pages_info = [{
+        "page_id": page_data["id"],
+        "page_name": page_data["name"],
+        "page_access_token": page_data["access_token"],
+        "instagram_id": ig.get("id"),
+        "instagram_username": ig.get("username"),
+        "tasks": [],
+        "is_admin": True,
+    }]
+
+    oauth_token = str(uuid.uuid4())
+    _oauth_sessions[oauth_token] = {
+        "pages": pages_info,
+        "facebook_user_id": facebook_id,
+        "user_name": user_name,
+        "instagram_access_token": user_access_token,
+    }
+    del _oauth_sessions[session_token]
+
+    redirect_html = (
+        '<!DOCTYPE html><html><head><title>Conectando...</title><style>'
+        'body{font-family:Arial,sans-serif;display:flex;justify-content:center;align-items:center;'
+        'height:100vh;margin:0;background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);color:white;}'
+        '.container{text-align:center;padding:40px;background:rgba(255,255,255,.1);'
+        'border-radius:10px;backdrop-filter:blur(10px);}'
+        '.spinner{border:4px solid rgba(255,255,255,.3);border-top:4px solid white;'
+        'border-radius:50%;width:50px;height:50px;animation:spin 1s linear infinite;margin:20px auto;}'
+        '@keyframes spin{0%{transform:rotate(0deg)}100%{transform:rotate(360deg)}}'
+        '</style></head><body><div class="container">'
+        '<div class="spinner"></div><h2>&#10003; Página conectada!</h2>'
+        '<p>Redirigiendo al dashboard...</p></div>'
+        '<script>setTimeout(()=>{window.location.href='
+        f"'{config.FRONTEND_URL}/?oauth_token={oauth_token}'"
+        ';},1000);</script></body></html>'
+    )
+    return HTMLResponse(content=redirect_html)
 
 
 # =============================================================================
