@@ -285,6 +285,7 @@ async def facebook_login(
         "pages_show_list",
         "pages_messaging",
         "pages_read_engagement",
+        "pages_manage_metadata",   # Required for New Pages Experience (NPE) pages to appear in /me/accounts
         "instagram_basic",
         "instagram_manage_messages"
     ]
@@ -524,6 +525,18 @@ async def facebook_callback(
             print(f"[OAuth] /me/accounts (basic) raw: {pages_data}")
 
         pages = pages_data.get('data', [])
+
+        # Fallback: try with explicit user ID instead of /me/ (helps with some NPE setups)
+        if not pages and facebook_id:
+            alt_url = (
+                f"https://graph.facebook.com/v21.0/{facebook_id}/accounts"
+                f"?fields=id,name,access_token,instagram_business_account{{id,username}}&limit=100"
+                f"&access_token={user_access_token}"
+            )
+            alt_response = requests.get(alt_url)
+            alt_data = alt_response.json() if alt_response.ok else {}
+            print(f"[OAuth] /{facebook_id}/accounts raw: {alt_data}")
+            pages = alt_data.get('data', [])
 
         if not pages:
             # If this is already a reauth retry, show a descriptive error.
