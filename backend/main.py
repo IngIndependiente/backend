@@ -690,12 +690,43 @@ async def facebook_callback(
                         'tasks': ['MANAGE'],
                     })
             else:
-                # No DB records either → show manual form as last resort
-                print(f"[OAuth] DB fallback found no candidatos for user {facebook_id}. Serving manual form.")
-                from fastapi.responses import HTMLResponse
-                return HTMLResponse(content=_render_page_id_form(
-                    user_access_token, facebook_id, user_name
-                ))
+                # No owner-matched candidatos. Try ALL active candidatos that have a page_id
+                # (covers single-tenant setups where owner_facebook_user_id was never set).
+                print(f"[OAuth] No candidatos with owner={facebook_id}. "
+                      f"Trying all active candidatos as fallback.")
+                all_pages = CandidatoService.obtener_todas_paginas()
+                if all_pages:
+                    print(f"[OAuth] Found {len(all_pages)} unowned candidato(s) — claiming for user {facebook_id}.")
+                    token_exp = datetime.utcnow() + timedelta(days=60)
+                    for p in all_pages:
+                        CandidatoService.actualizar_tokens_facebook(
+                            candidato_id=p['id'],
+                            facebook_page_id=p['facebook_page_id'],
+                            facebook_page_name=p.get('facebook_page_name', ''),
+                            facebook_page_access_token=p.get('facebook_page_access_token') or user_access_token,
+                            facebook_token_expiration=token_exp,
+                            instagram_business_account_id=p.get('instagram_business_account_id'),
+                            instagram_username=p.get('instagram_username'),
+                            instagram_access_token=user_access_token,
+                            owner_facebook_user_id=facebook_id,
+                        )
+                        pages.append({
+                            'id': p['facebook_page_id'],
+                            'name': p.get('facebook_page_name', 'Página'),
+                            'access_token': p.get('facebook_page_access_token') or user_access_token,
+                            'instagram_business_account': {
+                                'id': p.get('instagram_business_account_id'),
+                                'username': p.get('instagram_username'),
+                            } if p.get('instagram_business_account_id') else None,
+                            'tasks': ['MANAGE'],
+                        })
+                else:
+                    # Truly no pages anywhere → show manual form as last resort
+                    print(f"[OAuth] No candidatos found anywhere for user {facebook_id}. Serving manual form.")
+                    from fastapi.responses import HTMLResponse
+                    return HTMLResponse(content=_render_page_id_form(
+                        user_access_token, facebook_id, user_name
+                    ))
 
         # 6. Procesar información de cada página
         pages_info = []
