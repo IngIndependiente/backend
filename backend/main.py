@@ -1596,6 +1596,37 @@ async def actualizar_instagram_token(candidato_id: int, request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post("/api/candidatos/{candidato_id}/facebook-token")
+async def actualizar_facebook_token(candidato_id: int, request: Request):
+    """Sobrescribir el facebook_page_access_token para un candidato y actualizar META_ACCESS_TOKEN en memoria."""
+    try:
+        body = await request.json()
+        facebook_access_token = (body.get("facebook_access_token") or "").strip()
+        if not facebook_access_token:
+            raise HTTPException(status_code=400, detail="Token vacío")
+
+        from backend.database.models import Candidato as CandidatoModel
+        with get_db() as db:
+            candidato_obj = db.query(CandidatoModel).filter(CandidatoModel.id == candidato_id).first()
+            if not candidato_obj:
+                raise HTTPException(status_code=404, detail="Candidato no encontrado")
+            candidato_obj.facebook_page_access_token = facebook_access_token
+            db.commit()
+
+        # Actualizar META_ACCESS_TOKEN en memoria para esta instancia
+        config.META_ACCESS_TOKEN = facebook_access_token
+
+        return {"success": True, "message": "Token de Facebook actualizado correctamente"}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"❌ Error actualizando token de Facebook: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/api/intereses")
 def listar_intereses():
     """Listar todas las categorías de intereses disponibles."""
