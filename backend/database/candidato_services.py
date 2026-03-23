@@ -413,3 +413,40 @@ class CandidatoService:
                     Candidato.owner_facebook_user_id == owner_facebook_user_id
                 ).all()
                 return [c.id for c in candidatos]
+
+    @staticmethod
+    def obtener_paginas_por_owner(owner_facebook_user_id: str) -> list:
+        """
+        Devuelve datos completos de páginas de candidatos activos para un owner.
+        Usado como fallback cuando /me/accounts devuelve vacío (New Pages Experience).
+        Retorna lista de dicts con: id, facebook_page_id, facebook_page_name,
+        facebook_page_access_token, facebook_token_expiration,
+        instagram_business_account_id, instagram_username.
+        """
+        if config.ENV == "local":
+            storage = get_storage()
+            df = storage.candidatos_df
+            if 'owner_facebook_user_id' not in df.columns:
+                return []
+            mask = (df['estado'] == 'activo') & (df['owner_facebook_user_id'] == owner_facebook_user_id)
+            cols = [c for c in [
+                'id', 'facebook_page_id', 'facebook_page_name',
+                'facebook_page_access_token', 'facebook_token_expiration',
+                'instagram_business_account_id', 'instagram_username'
+            ] if c in df.columns]
+            return df[mask][cols].to_dict('records')
+        else:
+            with get_db() as db:
+                candidatos = db.query(Candidato).filter(
+                    Candidato.estado == 'activo',
+                    Candidato.owner_facebook_user_id == owner_facebook_user_id
+                ).all()
+                return [{
+                    'id': c.id,
+                    'facebook_page_id': c.facebook_page_id,
+                    'facebook_page_name': c.facebook_page_name,
+                    'facebook_page_access_token': c.facebook_page_access_token,
+                    'facebook_token_expiration': c.facebook_token_expiration,
+                    'instagram_business_account_id': c.instagram_business_account_id,
+                    'instagram_username': c.instagram_username,
+                } for c in candidatos]

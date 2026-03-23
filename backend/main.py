@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from typing import List, Optional
 from pydantic import BaseModel, EmailStr
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timedelta
 import json
 import secrets
 import pytz
@@ -629,13 +629,44 @@ async def facebook_callback(
 
         if not pages:
             # /me/accounts returned empty despite pages_show_list being granted.
-            # Known issue with New Pages Experience (NPE). Serve a manual-entry form.
+            # NPE workaround: reconstruct pages from existing DB candidatos for this owner.
             print(f"[OAuth] All /me/accounts attempts returned empty for user {facebook_id}. "
-                  f"Serving manual page-ID form. granted_perms={granted_perms}")
-            from fastapi.responses import HTMLResponse
-            return HTMLResponse(content=_render_page_id_form(
-                user_access_token, facebook_id, user_name
-            ))
+                  f"Trying DB candidatos fallback. granted_perms={granted_perms}")
+            db_pages = CandidatoService.obtener_paginas_por_owner(facebook_id) if facebook_id else []
+            db_pages = [p for p in db_pages if p.get('facebook_page_id')]
+            if db_pages:
+                print(f"[OAuth] DB fallback: found {len(db_pages)} candidato(s) for user {facebook_id}. "
+                      f"Reconstructing pages_info and updating instagram_access_token.")
+                for p in db_pages:
+                    token_exp = datetime.utcnow() + timedelta(days=60)
+                    CandidatoService.actualizar_tokens_facebook(
+                        candidato_id=p['id'],
+                        facebook_page_id=p['facebook_page_id'],
+                        facebook_page_name=p.get('facebook_page_name', ''),
+                        facebook_page_access_token=p.get('facebook_page_access_token') or user_access_token,
+                        facebook_token_expiration=token_exp,
+                        instagram_business_account_id=p.get('instagram_business_account_id'),
+                        instagram_username=p.get('instagram_username'),
+                        instagram_access_token=user_access_token,
+                        owner_facebook_user_id=facebook_id,
+                    )
+                    pages.append({
+                        'id': p['facebook_page_id'],
+                        'name': p.get('facebook_page_name', 'Página'),
+                        'access_token': p.get('facebook_page_access_token') or user_access_token,
+                        'instagram_business_account': {
+                            'id': p.get('instagram_business_account_id'),
+                            'username': p.get('instagram_username'),
+                        } if p.get('instagram_business_account_id') else None,
+                        'tasks': ['MANAGE'],
+                    })
+            else:
+                # No DB records either → show manual form as last resort
+                print(f"[OAuth] DB fallback found no candidatos for user {facebook_id}. Serving manual form.")
+                from fastapi.responses import HTMLResponse
+                return HTMLResponse(content=_render_page_id_form(
+                    user_access_token, facebook_id, user_name
+                ))
 
         # 6. Procesar información de cada página
         pages_info = []
