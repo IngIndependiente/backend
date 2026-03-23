@@ -81,17 +81,46 @@ import hashlib
 import hmac as _hmac
 from urllib.parse import urlencode
 
-# Store temporal para sesiones OAuth (pages pendientes de confirmar)
-# Se limpia en /api/oauth-session/{token} o en el siguiente login
-_oauth_sessions: dict = {}
-
 # Diagnóstico: guarda el último user_access_token procesado en el callback
 # SOLO para depuración vía /api/debug/facebook-pages — se sobreescribe en cada login
 _last_oauth_debug: dict = {}
 
 # Imports condicionales para SQLAlchemy
 if not USE_DATAFRAMES:
-    from backend.database.models import Persona, Interes, Conversacion, Analisis, Evento
+    from backend.database.models import Persona, Interes, Conversacion, Analisis, Evento, OAuthSession
+else:
+    from backend.database.models import OAuthSession
+
+# ── DB-backed OAuth session helpers ────────────────────────────────────────
+def _save_oauth_session(token: str, data: dict) -> None:
+    """Persiste una sesión OAuth en la DB (seguro en Railway multi-instancia)."""
+    from backend.database import SessionLocal
+    db = SessionLocal()
+    try:
+        session_obj = db.query(OAuthSession).filter(OAuthSession.token == token).first()
+        if session_obj:
+            session_obj.data_json = json.dumps(data)
+        else:
+            db.add(OAuthSession(token=token, data_json=json.dumps(data)))
+        db.commit()
+    finally:
+        db.close()
+
+def _pop_oauth_session(token: str) -> dict | None:
+    """Lee y elimina una sesión OAuth de la DB. Devuelve None si no existe."""
+    from backend.database import SessionLocal
+    db = SessionLocal()
+    try:
+        session_obj = db.query(OAuthSession).filter(OAuthSession.token == token).first()
+        if session_obj is None:
+            return None
+        data = json.loads(session_obj.data_json)
+        db.delete(session_obj)
+        db.commit()
+        return data
+    finally:
+        db.close()
+# ───────────────────────────────────────────────────────────────────────────
 
 # Inicializar la base de datos
 init_db()
@@ -696,14 +725,14 @@ async def facebook_callback(
                 "is_admin": is_admin
             })
         
-        # 4. Guardar páginas en store temporal con token y redirigir al frontend
+        # 4. Guardar páginas en DB con token y redirigir al frontend
         oauth_token = str(uuid.uuid4())
-        _oauth_sessions[oauth_token] = {
+        _save_oauth_session(oauth_token, {
             "pages": pages_info,
             "facebook_user_id": facebook_id,
             "user_name": user_name,
             "instagram_access_token": user_access_token  # User-level token needed for Instagram Messaging API
-        }
+        })
         
         from fastapi.responses import HTMLResponse
         
@@ -883,12 +912,12 @@ async def facebook_page_lookup(
     }]
 
     oauth_token = str(uuid.uuid4())
-    _oauth_sessions[oauth_token] = {
+    _save_oauth_session(oauth_token, {
         "pages": pages_info,
         "facebook_user_id": facebook_id,
         "user_name": user_name,
         "instagram_access_token": user_access_token,
-    }
+    })
 
     redirect_html = (
         '<!DOCTYPE html><html><head><title>Conectando...</title><style>'
@@ -918,7 +947,7 @@ async def obtener_oauth_session(token: str):
     Devuelve las páginas de Facebook almacenadas temporalmente para un token OAuth.
     Se elimina automáticamente tras la primera lectura.
     """
-    session = _oauth_sessions.pop(token, None)
+    session = _pop_oauth_session(token)
     if session is None:
         raise HTTPException(status_code=404, detail="Sesión OAuth no encontrada o ya utilizada")
     # Soporte tanto para el formato nuevo (dict) como legado (list)

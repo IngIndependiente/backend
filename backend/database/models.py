@@ -223,6 +223,18 @@ class MetaConfig(Base):
         return f"<MetaConfig(id={self.id}, plataforma='{self.plataforma}', estado='{self.estado}')>"
 
 
+class OAuthSession(Base):
+    """Sesiones OAuth temporales (reemplaza dict en memoria para Railway multi-instancia)."""
+    __tablename__ = 'oauth_sessions'
+
+    token = Column(String(36), primary_key=True)
+    data_json = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    def __repr__(self):
+        return f"<OAuthSession(token='{self.token[:8]}...')>"
+
+
 class UsuarioAutorizado(Base):
     """Lista blanca de usuarios autorizados a acceder a la app."""
     __tablename__ = 'usuarios_autorizados'
