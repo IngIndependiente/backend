@@ -672,7 +672,7 @@ async def facebook_callback(
                         candidato_id=p['id'],
                         facebook_page_id=p['facebook_page_id'],
                         facebook_page_name=p.get('facebook_page_name', ''),
-                        facebook_page_access_token=p.get('facebook_page_access_token') or user_access_token,
+                        facebook_page_access_token=user_access_token,
                         facebook_token_expiration=token_exp,
                         instagram_business_account_id=p.get('instagram_business_account_id'),
                         instagram_username=p.get('instagram_username'),
@@ -682,7 +682,7 @@ async def facebook_callback(
                     pages.append({
                         'id': p['facebook_page_id'],
                         'name': p.get('facebook_page_name', 'Página'),
-                        'access_token': p.get('facebook_page_access_token') or user_access_token,
+                        'access_token': user_access_token,
                         'instagram_business_account': {
                             'id': p.get('instagram_business_account_id'),
                             'username': p.get('instagram_username'),
@@ -703,7 +703,7 @@ async def facebook_callback(
                             candidato_id=p['id'],
                             facebook_page_id=p['facebook_page_id'],
                             facebook_page_name=p.get('facebook_page_name', ''),
-                            facebook_page_access_token=p.get('facebook_page_access_token') or user_access_token,
+                            facebook_page_access_token=user_access_token,
                             facebook_token_expiration=token_exp,
                             instagram_business_account_id=p.get('instagram_business_account_id'),
                             instagram_username=p.get('instagram_username'),
@@ -713,7 +713,7 @@ async def facebook_callback(
                         pages.append({
                             'id': p['facebook_page_id'],
                             'name': p.get('facebook_page_name', 'Página'),
-                            'access_token': p.get('facebook_page_access_token') or user_access_token,
+                            'access_token': user_access_token,
                             'instagram_business_account': {
                                 'id': p.get('instagram_business_account_id'),
                                 'username': p.get('instagram_username'),
