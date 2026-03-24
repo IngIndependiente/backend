@@ -1351,11 +1351,36 @@ def sincronizar_candidato(
         if job.get("state") == "running":
             return {"ok": False, "message": "Ya hay una sincronización en curso para este candidato."}
 
-        # Always use the per-candidato page_access_token for Facebook.
-        # Using a global ENV token (META_ACCESS_TOKEN) across multiple candidatos causes
-        # error #10 "Requested Page Does Not Match Page Access Token" because each
-        # page_access_token is scoped to a specific Page.
-        _fb_token = candidato['facebook_page_access_token']
+        # Para leer conversaciones se necesita pages_messaging — META_ACCESS_TOKEN
+        # (una Page Access Token configurada en Railway) tiene prioridad sobre el
+        # token por-candidato guardado en BD. Si no hay ENV token, usa el de BD
+        # y hace un intento de auto-conversión UAT→PAT antes de sincronizar.
+        _page_id = candidato.get('facebook_page_id')
+        _fb_token = config.META_ACCESS_TOKEN or candidato['facebook_page_access_token']
+
+        # Self-heal: si el token de BD es un User Access Token (no Page Access Token),
+        # intentar auto-convertirlo antes de sincronizar.
+        if not config.META_ACCESS_TOKEN and _fb_token and _page_id:
+            try:
+                _r = requests.get(
+                    f"https://graph.facebook.com/v21.0/{_page_id}",
+                    params={"fields": "access_token", "access_token": _fb_token},
+                    timeout=8
+                )
+                _page_tok = _r.json().get("access_token")
+                if _page_tok and _page_tok != _fb_token:
+                    print(f"   🔄 [Sync] Auto-exchanged UAT → Page Token for {_page_id}: prefix={_page_tok[:12]}...")
+                    _fb_token = _page_tok
+                    # Persistir el token correcto para futuros syncs
+                    from backend.database.models import Candidato as _CandidatoModel
+                    with get_db() as _db:
+                        _co = _db.query(_CandidatoModel).filter(_CandidatoModel.id == candidato_id).first()
+                        if _co:
+                            _co.facebook_page_access_token = _page_tok
+                            _db.commit()
+            except Exception as _exc:
+                print(f"   ⚠️ [Sync] Page token exchange failed: {_exc}. Proceeding with stored token.")
+
         cliente = crear_cliente_candidato(
             _fb_token,
             instagram_token=candidato.get('instagram_access_token')
@@ -1363,7 +1388,8 @@ def sincronizar_candidato(
         _ig_db = candidato.get('instagram_access_token')
         _ig_valid = isinstance(_ig_db, str) and bool(_ig_db.strip())
         token_source = "DB" if _ig_valid else "PAGE_TOKEN_FALLBACK"
-        print(f"   🔑 Facebook token source: DB(facebook_page_access_token) | prefix={_fb_token[:12]}...")
+        _fb_src = "ENV(META_ACCESS_TOKEN)" if config.META_ACCESS_TOKEN else "DB(facebook_page_access_token)"
+        print(f"   🔑 Facebook token source: {_fb_src} | prefix={_fb_token[:12]}...")
         print(f"   🔑 Instagram token source: {token_source} | db_raw={repr(_ig_db)[:30]} | prefix={(cliente.instagram_token or '')[:12]}...")
         if desde_fecha:
             try:
