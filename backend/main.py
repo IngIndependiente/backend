@@ -1619,12 +1619,38 @@ async def actualizar_instagram_token(candidato_id: int, request: Request):
 
 @app.post("/api/candidatos/{candidato_id}/facebook-token")
 async def actualizar_facebook_token(candidato_id: int, request: Request):
-    """Sobrescribir el facebook_page_access_token para un candidato y actualizar META_ACCESS_TOKEN en memoria."""
+    """Sobrescribir el facebook_page_access_token para un candidato.
+    Si el token dado es un User Access Token, intenta cambiarlo automáticamente
+    por un Page Access Token usando /{page_id}?fields=access_token."""
     try:
         body = await request.json()
-        facebook_access_token = (body.get("facebook_access_token") or "").strip()
-        if not facebook_access_token:
+        given_token = (body.get("facebook_access_token") or "").strip()
+        if not given_token:
             raise HTTPException(status_code=400, detail="Token vacío")
+
+        # Resolve candidato and page_id first
+        candidato = CandidatoService.obtener_candidato_por_id(candidato_id)
+        if not candidato:
+            raise HTTPException(status_code=404, detail="Candidato no encontrado")
+        page_id = candidato.get('facebook_page_id')
+
+        # Try to exchange for a proper Page Access Token
+        facebook_access_token = given_token
+        if page_id:
+            try:
+                r = requests.get(
+                    f"https://graph.facebook.com/v21.0/{page_id}",
+                    params={"fields": "access_token,name", "access_token": given_token},
+                    timeout=8
+                )
+                tok = r.json().get("access_token")
+                if tok:
+                    print(f"[TokenFB] Exchanged user token → page token for {page_id}: prefix={tok[:12]}...")
+                    facebook_access_token = tok
+                else:
+                    print(f"[TokenFB] No page token returned for {page_id}: {r.json()}. Storing given token as-is.")
+            except Exception as exc:
+                print(f"[TokenFB] Exchange failed for {page_id}: {exc}. Storing given token as-is.")
 
         from backend.database.models import Candidato as CandidatoModel
         with get_db() as db:
@@ -1637,7 +1663,8 @@ async def actualizar_facebook_token(candidato_id: int, request: Request):
         # Actualizar META_ACCESS_TOKEN en memoria para esta instancia
         config.META_ACCESS_TOKEN = facebook_access_token
 
-        return {"success": True, "message": "Token de Facebook actualizado correctamente"}
+        stored_type = "Page Token" if facebook_access_token != given_token else "token (sin cambio de tipo)"
+        return {"success": True, "message": f"Token de Facebook actualizado correctamente ({stored_type})"}
 
     except HTTPException:
         raise
