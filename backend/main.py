@@ -656,6 +656,25 @@ async def facebook_callback(
             print(f"[OAuth] /{facebook_id}/accounts raw: {alt_data}")
             pages = alt_data.get('data', [])
 
+        def _fetch_page_token(page_id: str, user_token: str) -> str:
+            """Try to get a Page Access Token for an NPE page via /{page_id}?fields=access_token.
+            Falls back to user_token if the call fails or returns no token."""
+            try:
+                r = requests.get(
+                    f"https://graph.facebook.com/v21.0/{page_id}",
+                    params={"fields": "access_token,name", "access_token": user_token},
+                    timeout=8
+                )
+                data = r.json()
+                tok = data.get("access_token")
+                if tok:
+                    print(f"[OAuth] Page token fetched for {page_id}: prefix={tok[:12]}...")
+                    return tok
+                print(f"[OAuth] /{page_id}?fields=access_token returned no token: {data}")
+            except Exception as exc:
+                print(f"[OAuth] Failed to fetch page token for {page_id}: {exc}")
+            return user_token
+
         if not pages:
             # /me/accounts returned empty despite pages_show_list being granted.
             # NPE workaround: reconstruct pages from existing DB candidatos for this owner.
@@ -667,12 +686,13 @@ async def facebook_callback(
                 print(f"[OAuth] DB fallback: found {len(db_pages)} candidato(s) for user {facebook_id}. "
                       f"Reconstructing pages_info and updating instagram_access_token.")
                 for p in db_pages:
+                    page_token = _fetch_page_token(p['facebook_page_id'], user_access_token)
                     token_exp = datetime.utcnow() + timedelta(days=60)
                     CandidatoService.actualizar_tokens_facebook(
                         candidato_id=p['id'],
                         facebook_page_id=p['facebook_page_id'],
                         facebook_page_name=p.get('facebook_page_name', ''),
-                        facebook_page_access_token=user_access_token,
+                        facebook_page_access_token=page_token,
                         facebook_token_expiration=token_exp,
                         instagram_business_account_id=p.get('instagram_business_account_id'),
                         instagram_username=p.get('instagram_username'),
@@ -682,7 +702,7 @@ async def facebook_callback(
                     pages.append({
                         'id': p['facebook_page_id'],
                         'name': p.get('facebook_page_name', 'Página'),
-                        'access_token': user_access_token,
+                        'access_token': page_token,
                         'instagram_business_account': {
                             'id': p.get('instagram_business_account_id'),
                             'username': p.get('instagram_username'),
@@ -699,11 +719,12 @@ async def facebook_callback(
                     print(f"[OAuth] Found {len(all_pages)} unowned candidato(s) — claiming for user {facebook_id}.")
                     token_exp = datetime.utcnow() + timedelta(days=60)
                     for p in all_pages:
+                        page_token = _fetch_page_token(p['facebook_page_id'], user_access_token)
                         CandidatoService.actualizar_tokens_facebook(
                             candidato_id=p['id'],
                             facebook_page_id=p['facebook_page_id'],
                             facebook_page_name=p.get('facebook_page_name', ''),
-                            facebook_page_access_token=user_access_token,
+                            facebook_page_access_token=page_token,
                             facebook_token_expiration=token_exp,
                             instagram_business_account_id=p.get('instagram_business_account_id'),
                             instagram_username=p.get('instagram_username'),
@@ -713,7 +734,7 @@ async def facebook_callback(
                         pages.append({
                             'id': p['facebook_page_id'],
                             'name': p.get('facebook_page_name', 'Página'),
-                            'access_token': user_access_token,
+                            'access_token': page_token,
                             'instagram_business_account': {
                                 'id': p.get('instagram_business_account_id'),
                                 'username': p.get('instagram_username'),
