@@ -19,7 +19,7 @@ class WhatsAppClient:
         self.phone_number_id = phone_number_id or config.WHATSAPP_PHONE_NUMBER_ID
         self.business_account_id = business_account_id or config.WHATSAPP_BUSINESS_ACCOUNT_ID
         self.access_token = access_token or config.META_ACCESS_TOKEN
-        self.base_url = "https://graph.facebook.com/v18.0"
+        self.base_url = "https://graph.facebook.com/v21.0"
 
         # Advertencias de configuración al inicializar
         if not self.phone_number_id:

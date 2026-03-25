@@ -80,11 +80,18 @@ class PersonaService:
         # Actualizar fecha último contacto
         persona.fecha_ultimo_contacto = datetime.utcnow()
         
-        # Gestionar intereses
+        # Gestionar intereses (categorías dinámicas: si no existe, se crea)
         if datos.get("intereses"):
             for categoria in datos["intereses"]:
+                if not categoria or not categoria.strip():
+                    continue
+                categoria = categoria.strip()
                 interes = db.query(Interes).filter(Interes.categoria == categoria).first()
-                if interes and interes not in persona.intereses:
+                if not interes:
+                    interes = Interes(categoria=categoria)
+                    db.add(interes)
+                    db.flush()
+                if interes not in persona.intereses:
                     persona.intereses.append(interes)
         
         db.commit()

@@ -97,50 +97,16 @@ class AgenteExtraccionDatos:
         """Construir el grafo de estado del agente."""
         workflow = StateGraph(AgentState)
         
-        # Añadir nodos
-        workflow.add_node("analizar_mensaje", self._analizar_mensaje)
+        # Añadir nodos (FIX: eliminado nodo analizar_mensaje que hacía una llamada LLM innecesaria)
         workflow.add_node("extraer_datos", self._extraer_datos)
         workflow.add_node("validar_datos", self._validar_datos)
         
         # Definir el flujo
-        workflow.set_entry_point("analizar_mensaje")
-        workflow.add_edge("analizar_mensaje", "extraer_datos")
+        workflow.set_entry_point("extraer_datos")
         workflow.add_edge("extraer_datos", "validar_datos")
         workflow.add_edge("validar_datos", END)
         
         return workflow.compile()
-    
-    def _analizar_mensaje(self, state: AgentState) -> AgentState:
-        """Analizar el mensaje para determinar el contexto."""
-        mensaje = state["mensaje"]
-        plataforma = state.get("plataforma", "desconocida")
-        
-        system_prompt = """Eres un asistente político que analiza conversaciones con ciudadanos.
-Tu objetivo es identificar si el mensaje contiene información relevante sobre la persona.
-
-Determina si el mensaje contiene:
-- Información personal (nombre, edad, género)
-- Intereses o preocupaciones
-- Datos de contacto
-- Ubicación u ocupación
-
-Responde con un breve análisis del contenido."""
-
-        try:
-            response = self.llm.invoke([
-                SystemMessage(content=system_prompt),
-                HumanMessage(content=f"Plataforma: {plataforma}\nMensaje: {mensaje}")
-            ])
-            
-            # Actualizar historial
-            historial = state.get("historial_conversacion", [])
-            historial.append(mensaje)
-            state["historial_conversacion"] = historial
-            
-        except Exception as e:
-            state["error"] = f"Error al analizar mensaje: {str(e)}"
-        
-        return state
     
     def _extraer_datos(self, state: AgentState) -> AgentState:
         """Extraer datos estructurados del mensaje."""
@@ -151,32 +117,41 @@ Responde con un breve análisis del contenido."""
         # Contexto del historial
         contexto_historial = "\n".join(historial[-5:]) if historial else mensaje
         
-        system_prompt = f"""Eres un experto en extracción de información. Analiza la conversación y extrae datos estructurados.
+        system_prompt = f"""Eres un experto en extracción de información de conversaciones políticas.
 
-CATEGORÍAS DE INTERESES DISPONIBLES:
-{', '.join(config.CATEGORIAS_INTERES)}
+CONTEXTO IMPORTANTE:
+Estás analizando mensajes enviados POR UN CIUDADANO a la página de un político/candidato.
+- El nombre de usuario (perfil de red social) del CIUDADANO que escribe es: "{nombre_usuario}"
+- Todo lo que extraigas debe ser sobre EL CIUDADANO que escribe, NO sobre el político mencionado.
+- Si el ciudadano menciona o felicita a un político, NO uses el nombre del político como nombre_completo.
+- La ocupación debe ser la del CIUDADANO, no la del político mencionado.
 
 GÉNEROS DISPONIBLES:
 {', '.join(config.GENEROS)}
 
 INSTRUCCIONES:
-1. Extrae información EXPLÍCITAMENTE mencionada en el texto.
-2. Si el GÉNERO no se menciona explícitamente, INFIÉRELO a partir del nombre de usuario: "{nombre_usuario}".
-3. Si el nombre no es claro, déjalo como null o "No especificado".
+1. Extrae información del CIUDADANO que escribe, NO del político mencionado.
+2. Para nombre_completo: usa "{nombre_usuario}" como base. Solo reemplázalo si el ciudadano dice explícitamente su propio nombre.
+3. Si el GÉNERO no se menciona, INFIÉRELO del nombre de usuario: "{nombre_usuario}".
+4. Para intereses: genera libremente las categorías que mejor describan las preocupaciones del ciudadano.
+   Ejemplos: "Seguridad", "Educación", "Salud", "Empleo", "Vivienda", "Pensiones", "Medio Ambiente", "Transporte", "Economía", "Derechos Humanos", etc.
+   NO te limites a categorías predefinidas. Usa la que mejor represente la preocupación real.
+5. Si el mensaje es solo un emoji, saludo breve o felicitación sin contenido sustantivo, deja intereses como lista vacía.
+6. Para campos sin información, usa null (no uses strings como "None", "No especificado" o "Desconocido").
 
-Devuelve un JSON con esta estructura:
+Devuelve SOLO un JSON con esta estructura:
 {{
-    "nombre_completo": "nombre si se menciona, sino usar '{nombre_usuario}' si parece un nombre real",
-    "edad": número si se menciona, sino null,
-    "genero": "uno de los géneros disponibles",
-    "telefono": "si se menciona, sino null",
-    "email": "si se menciona, sino null",
-    "ocupacion": "si se menciona, sino null",
-    "ubicacion": "si se menciona, sino null",
-    "intereses": ["lista de categorías que coincidan con las preocupaciones mencionadas"],
-    "resumen_conversacional": "un resumen breve (max 100 caracteres) de lo que trata la conversación actual",
-    "otros_datos": {{"clave": "valor para cualquier información adicional relevante"}},
-    "confianza": "alta/media/baja según qué tan explícita es la información"
+    "nombre_completo": "{nombre_usuario}" o nombre real si el ciudadano lo menciona,
+    "edad": número o null,
+    "genero": "uno de: Masculino, Femenino, Otro, No especificado",
+    "telefono": "número o null",
+    "email": "email o null",
+    "ocupacion": "ocupación del CIUDADANO o null",
+    "ubicacion": "ubicación del CIUDADANO o null",
+    "intereses": ["lista libre de temas políticos que preocupan al ciudadano"],
+    "resumen_conversacional": "resumen breve (max 100 chars) de la conversación",
+    "otros_datos": {{"clave": "valor adicional relevante"}},
+    "confianza": "alta/media/baja"
 }}"""
 
         try:
@@ -210,13 +185,30 @@ Devuelve un JSON con esta estructura:
         """Validar y limpiar los datos extraídos."""
         datos = state.get("datos_extraidos", {})
         
-        # Validar categorías de intereses
+        # Valores que la IA a veces devuelve en vez de null
+        _VALORES_NULOS = {"none", "null", "no especificado", "desconocido", "n/a", "no disponible", ""}
+        
+        def _limpiar_campo(valor):
+            """Retorna None si el valor es un string nulo disfrazado."""
+            if valor is None:
+                return None
+            if isinstance(valor, str) and valor.strip().lower() in _VALORES_NULOS:
+                return None
+            return valor
+        
+        # Limpiar campos de texto que la IA puede devolver como "None" string
+        for campo in ["nombre_completo", "telefono", "email", "ocupacion", "ubicacion"]:
+            if campo in datos:
+                datos[campo] = _limpiar_campo(datos[campo])
+        
+        # Validar intereses: aceptar cualquier categoría (generación dinámica por IA)
         if "intereses" in datos and datos["intereses"]:
-            intereses_validos = [
-                i for i in datos["intereses"] 
-                if i in config.CATEGORIAS_INTERES
-            ]
-            datos["intereses"] = intereses_validos
+            # Solo limpiar: quitar vacíos y normalizar capitalización
+            intereses_limpios = []
+            for i in datos["intereses"]:
+                if isinstance(i, str) and i.strip():
+                    intereses_limpios.append(i.strip().title())
+            datos["intereses"] = intereses_limpios
         
         # Validar género
         if "genero" in datos and datos["genero"]:
@@ -231,6 +223,11 @@ Devuelve un JSON con esta estructura:
                     datos["edad"] = None
             except (ValueError, TypeError):
                 datos["edad"] = None
+        
+        # Usar nombre_usuario como fallback si nombre_completo quedó vacío
+        nombre_usuario = state.get("nombre_usuario")
+        if not datos.get("nombre_completo") and nombre_usuario:
+            datos["nombre_completo"] = nombre_usuario
         
         # Determinar si necesita más información
         campos_importantes = ["nombre_completo", "intereses", "edad", "genero"]
