@@ -1722,7 +1722,7 @@ def listar_personas(
     fecha_inicio: Optional[str] = Query(None),
     fecha_fin: Optional[str] = Query(None)
 ):
-    """Listar todas las sesiones de conversación (análisis)."""
+    """Listar personas únicas con su análisis más reciente."""
     
     # Parsear fechas si existen
     dt_inicio = None
@@ -1739,6 +1739,7 @@ def listar_personas(
             pass
 
     resultado = []
+    personas_vistas = set()
     
     if USE_DATAFRAMES:
         # Modo DataFrames
@@ -1748,28 +1749,29 @@ def listar_personas(
         analisis_list = AnalisisService.buscar_analisis(
             fecha_inicio=dt_inicio,
             fecha_fin=dt_fin,
-            limit=limit
+            limit=2000
         )
         
         for analisis in analisis_list:
             persona_id = analisis['persona_id']
-            persona = PersonaService.obtener_persona_por_id(persona_id)
+            if persona_id in personas_vistas:
+                continue
+            personas_vistas.add(persona_id)
             
+            persona = PersonaService.obtener_persona_por_id(persona_id)
             if not persona:
                 continue
             
-            # Obtener intereses
+            # Obtener intereses de la persona (tabla relacional, no del análisis)
             intereses = []
             try:
-                if analisis.get('categorias'):
+                rel_mask = storage.persona_interes_df['persona_id'] == persona_id
+                if rel_mask.any():
+                    interes_ids = storage.persona_interes_df[rel_mask]['interes_id'].values
+                    intereses_mask = storage.intereses_df['id'].isin(interes_ids)
+                    intereses = storage.intereses_df[intereses_mask]['categoria'].tolist()
+                if not intereses and analisis.get('categorias'):
                     intereses = json.loads(analisis['categorias'])
-                else:
-                    # Buscar intereses de la persona
-                    rel_mask = storage.persona_interes_df['persona_id'] == persona_id
-                    if rel_mask.any():
-                        interes_ids = storage.persona_interes_df[rel_mask]['interes_id'].values
-                        intereses_mask = storage.intereses_df['id'].isin(interes_ids)
-                        intereses = storage.intereses_df[intereses_mask]['categoria'].tolist()
             except:
                 intereses = []
             
@@ -1800,6 +1802,9 @@ def listar_personas(
                 "evento_nombre": evento_nombre,
                 "plataforma": analisis.get('plataforma') or _derivar_plataforma(persona)
             })
+            
+            if len(resultado) >= limit:
+                break
     else:
         # Modo SQLAlchemy — necesita sesión de BD
         with get_db() as db:
@@ -1807,16 +1812,20 @@ def listar_personas(
                 db,
                 fecha_inicio=dt_inicio,
                 fecha_fin=dt_fin,
-                limit=limit
+                limit=2000
             )
             for analisis in analisis_list:
                 persona = analisis.persona
+                if persona.id in personas_vistas:
+                    continue
+                personas_vistas.add(persona.id)
+                
                 intereses = []
                 try:
-                    if analisis.categorias:
-                         intereses = json.loads(analisis.categorias)
-                    elif persona.intereses:
+                    if persona.intereses:
                          intereses = [i.categoria for i in persona.intereses]
+                    elif analisis.categorias:
+                         intereses = json.loads(analisis.categorias)
                 except:
                     intereses = []
 
@@ -1840,6 +1849,9 @@ def listar_personas(
                     "evento_nombre": analisis.evento.nombre if analisis.evento else None,
                     "plataforma": analisis.plataforma or _derivar_plataforma(persona)
                 })
+                
+                if len(resultado) >= limit:
+                    break
     
     return resultado
 
@@ -2186,7 +2198,7 @@ def _buscar_personas_impl(busqueda: BusquedaRequest):  # noqa: C901
 
 @app.post("/api/personas/exportar")
 def exportar_personas(busqueda: BusquedaRequest):
-    """Exportar sesiones a CSV según criterios."""
+    """Exportar personas únicas a CSV según criterios (una fila por persona)."""
     # 1. Parsear fechas
     dt_inicio = None
     dt_fin = None
@@ -2214,11 +2226,15 @@ def exportar_personas(busqueda: BusquedaRequest):
             )
         
     data = []
+    personas_vistas = set()
     candidato_ids_owner = _get_candidato_ids_por_owner(busqueda.facebook_user_id)
     
     if USE_DATAFRAMES:
         for analisis in analisis_candidates:
-            persona = PersonaService.obtener_persona_por_id(analisis['persona_id'])
+            pid = analisis['persona_id']
+            if pid in personas_vistas: continue
+            
+            persona = PersonaService.obtener_persona_por_id(pid)
             if not persona: continue
 
             # Filtro por propietario
@@ -2239,22 +2255,26 @@ def exportar_personas(busqueda: BusquedaRequest):
             if busqueda.intereses:
                 if not any(i in intereses for i in busqueda.intereses): continue
 
+            personas_vistas.add(pid)
             data.append({
                 "ID Persona": persona['id'],
-                "ID Sesión": analisis['id'],
-                "Inicio Conversación": (analisis.get('start_conversation') or analisis.get('fecha_analisis')),
-                "Resumen": analisis.get('resumen') or "",
                 "Nombre Completo": persona.get('nombre_completo') or "",
                 "Usuario Facebook": persona.get('facebook_username') or "",
                 "Usuario Instagram": persona.get('instagram_username') or "",
+                "Teléfono": persona.get('telefono') or "",
+                "Email": persona.get('email') or "",
                 "Edad": persona.get('edad') or "",
                 "Género": persona.get('genero') or "",
+                "Ocupación": persona.get('ocupacion') or "",
                 "Ubicación": persona.get('ubicacion') or "",
-                "Email": persona.get('email') or "",
+                "Intereses": ", ".join(intereses) if intereses else "",
+                "Resumen": analisis.get('resumen') or "",
+                "Último Contacto": (analisis.get('start_conversation') or analisis.get('fecha_analisis')),
             })
     else:
         for analisis in analisis_candidates:
             persona = analisis.persona
+            if persona.id in personas_vistas: continue
 
             # Filtro por propietario
             if candidato_ids_owner is not None and persona.candidato_id not in candidato_ids_owner: continue
@@ -2264,22 +2284,26 @@ def exportar_personas(busqueda: BusquedaRequest):
             if busqueda.edad_min and (not persona.edad or persona.edad < busqueda.edad_min): continue
             if busqueda.edad_max and (not persona.edad or persona.edad > busqueda.edad_max): continue
             if busqueda.ubicacion and (not persona.ubicacion or busqueda.ubicacion.lower() not in persona.ubicacion.lower()): continue
+            
+            p_intereses = [i.categoria for i in persona.intereses] if persona.intereses else []
             if busqueda.intereses:
-                 p_intereses = [i.categoria for i in persona.intereses]
                  if not any(i in p_intereses for i in busqueda.intereses): continue
             
+            personas_vistas.add(persona.id)
             data.append({
                 "ID Persona": persona.id,
-                "ID Sesión": analisis.id,
-                "Inicio Conversación": (analisis.start_conversation or analisis.fecha_analisis).strftime("%Y-%m-%d %H:%M:%S"),
-                "Resumen": analisis.resumen or "",
                 "Nombre Completo": persona.nombre_completo or "",
                 "Usuario Facebook": persona.facebook_username or "",
                 "Usuario Instagram": persona.instagram_username or "",
+                "Teléfono": persona.telefono or "",
+                "Email": persona.email or "",
                 "Edad": persona.edad or "",
                 "Género": persona.genero or "",
+                "Ocupación": persona.ocupacion or "",
                 "Ubicación": persona.ubicacion or "",
-                "Email": persona.email or "",
+                "Intereses": ", ".join(p_intereses) if p_intereses else "",
+                "Resumen": analisis.resumen or "",
+                "Último Contacto": (analisis.start_conversation or analisis.fecha_analisis).strftime("%Y-%m-%d %H:%M:%S"),
             })
         
     df = pd.DataFrame(data)
@@ -2720,19 +2744,24 @@ def obtener_estadisticas(owner_facebook_user_id: Optional[str] = Query(None)):
 
 
 @app.get("/api/debug/logs")
-def debug_logs(n: int = 200):
-    """Devuelve las últimas N líneas del log en memoria."""
+def debug_logs(n: int = 200, password: Optional[str] = Query(None)):
+    """Devuelve las últimas N líneas del log en memoria (protegido por contraseña)."""
+    if config.DEBUG_PASSWORD and password != config.DEBUG_PASSWORD:
+        raise HTTPException(status_code=403, detail="Contraseña de debug requerida (?password=...)")
     lines = list(_LOG_BUFFER)[-n:]
     return {"total": len(_LOG_BUFFER), "lines": lines}
 
 
 @app.get("/api/debug/facebook-pages")
-def debug_facebook_pages(access_token: Optional[str] = Query(None)):
+def debug_facebook_pages(access_token: Optional[str] = Query(None), password: Optional[str] = Query(None)):
     """
     Diagnóstico OAuth: llama directamente a /me/accounts y /me/permissions
     usando el último user_access_token capturado en el callback, o el token
     proporcionado manualmente como query param ?access_token=...
+    Protegido por contraseña.
     """
+    if config.DEBUG_PASSWORD and password != config.DEBUG_PASSWORD:
+        raise HTTPException(status_code=403, detail="Contraseña de debug requerida (?password=...)")
     token = access_token or _last_oauth_debug.get("user_access_token")
     if not token:
         return {"error": "No hay token disponible. Completa el flujo OAuth al menos una vez, o pasa ?access_token=TU_TOKEN"}
@@ -2778,8 +2807,11 @@ def debug_facebook_pages(access_token: Optional[str] = Query(None)):
 
 
 @app.get("/api/debug/status")
-def debug_status():
-    """Estado de los DataFrames y logs de sincronización (solo para depuración)."""
+def debug_status(password: Optional[str] = Query(None)):
+    """Estado de los DataFrames y logs de sincronización (protegido por contraseña)."""
+    if config.DEBUG_PASSWORD and password != config.DEBUG_PASSWORD:
+        raise HTTPException(status_code=403, detail="Contraseña de debug requerida (?password=...)")
+
     info: dict = {"modo": "dataframes" if USE_DATAFRAMES else "sqlalchemy"}
 
     if USE_DATAFRAMES:
@@ -3781,6 +3813,7 @@ def procesar_mensaje_whatsapp(phone: str, texto: str, username: str, message_id:
             print(f"[WSP-PROC] ❌ phone_number_id no disponible en cliente_wsp — no se puede enviar respuesta. Configura WhatsApp desde el panel del candidato.")
         else:
             try:
+                enviado = False
                 if es_primer_mensaje or not intereses:
                     respuesta_texto = f"¡Hola{' ' + nombre if nombre else ''}! Gracias por contactarnos. ¿Qué tema te interesa más?"
                     botones = [
@@ -3789,7 +3822,7 @@ def procesar_mensaje_whatsapp(phone: str, texto: str, username: str, message_id:
                         {"id": "SALUD", "title": "🏥 Salud"}
                     ]
                     print(f"[WSP-PROC] Enviando botones interactivos a {phone}...")
-                    cliente_wsp.enviar_mensaje_con_botones(phone, respuesta_texto, botones)
+                    enviado = cliente_wsp.enviar_mensaje_con_botones(phone, respuesta_texto, botones)
                 else:
                     if nombre:
                         respuesta = f"Gracias {nombre} por compartir tu preocupación"
@@ -3799,9 +3832,12 @@ def procesar_mensaje_whatsapp(phone: str, texto: str, username: str, message_id:
                         respuesta += f" sobre {', '.join(intereses)}"
                     respuesta += ". Un miembro de nuestro equipo revisará tu mensaje pronto."
                     print(f"[WSP-PROC] Enviando respuesta de texto a {phone}...")
-                    cliente_wsp.enviar_mensaje(phone, respuesta)
+                    enviado = cliente_wsp.enviar_mensaje(phone, respuesta)
 
-                print(f"✅ [WSP-PROC] Respuesta enviada a {phone}")
+                if enviado:
+                    print(f"✅ [WSP-PROC] Respuesta enviada a {phone}")
+                else:
+                    print(f"⚠️ [WSP-PROC] Respuesta NO enviada a {phone} (API retornó error)")
             except Exception as e_send:
                 print(f"[WSP-PROC] ❌ Error enviando respuesta a {phone}: {e_send}")
 

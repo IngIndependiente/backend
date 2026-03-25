@@ -140,3 +140,4 @@ CATEGORIAS_INTERES = [
 # Géneros
 GENEROS = ["Masculino", "Femenino", "Otro", "No especificado"]
 SYNC_PASSWORD = os.getenv("SYNC_PASSWORD", "")
+DEBUG_PASSWORD = os.getenv("DEBUG_PASSWORD", "")
