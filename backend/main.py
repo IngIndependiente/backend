@@ -2209,27 +2209,17 @@ def exportar_personas(busqueda: BusquedaRequest):
         try: dt_fin = datetime.fromisoformat(busqueda.fecha_fin)
         except: pass
             
-    # 2. Obtener todos los análisis (limit alto)
+    # 2. Obtener análisis y construir data
+    data = []
+    personas_vistas = set()
+    candidato_ids_owner = _get_candidato_ids_por_owner(busqueda.facebook_user_id)
+    
     if USE_DATAFRAMES:
         analisis_candidates = AnalisisService.buscar_analisis(
             fecha_inicio=dt_inicio, 
             fecha_fin=dt_fin,
             limit=2000 
         )
-    else:
-        with get_db() as db:
-            analisis_candidates = AnalisisService.buscar_analisis(
-                db, 
-                fecha_inicio=dt_inicio, 
-                fecha_fin=dt_fin,
-                limit=2000 
-            )
-        
-    data = []
-    personas_vistas = set()
-    candidato_ids_owner = _get_candidato_ids_por_owner(busqueda.facebook_user_id)
-    
-    if USE_DATAFRAMES:
         for analisis in analisis_candidates:
             pid = analisis['persona_id']
             if pid in personas_vistas: continue
@@ -2272,39 +2262,46 @@ def exportar_personas(busqueda: BusquedaRequest):
                 "Último Contacto": (analisis.get('start_conversation') or analisis.get('fecha_analisis')),
             })
     else:
-        for analisis in analisis_candidates:
-            persona = analisis.persona
-            if persona.id in personas_vistas: continue
+        with get_db() as db:
+            analisis_candidates = AnalisisService.buscar_analisis(
+                db, 
+                fecha_inicio=dt_inicio, 
+                fecha_fin=dt_fin,
+                limit=2000 
+            )
+            for analisis in analisis_candidates:
+                persona = analisis.persona
+                if persona.id in personas_vistas: continue
 
-            # Filtro por propietario
-            if candidato_ids_owner is not None and persona.candidato_id not in candidato_ids_owner: continue
-            
-            # Filtros demográficos
-            if busqueda.genero and persona.genero != busqueda.genero: continue
-            if busqueda.edad_min and (not persona.edad or persona.edad < busqueda.edad_min): continue
-            if busqueda.edad_max and (not persona.edad or persona.edad > busqueda.edad_max): continue
-            if busqueda.ubicacion and (not persona.ubicacion or busqueda.ubicacion.lower() not in persona.ubicacion.lower()): continue
-            
-            p_intereses = [i.categoria for i in persona.intereses] if persona.intereses else []
-            if busqueda.intereses:
-                 if not any(i in p_intereses for i in busqueda.intereses): continue
-            
-            personas_vistas.add(persona.id)
-            data.append({
-                "ID Persona": persona.id,
-                "Nombre Completo": persona.nombre_completo or "",
-                "Usuario Facebook": persona.facebook_username or "",
-                "Usuario Instagram": persona.instagram_username or "",
-                "Teléfono": persona.telefono or "",
-                "Email": persona.email or "",
-                "Edad": persona.edad or "",
-                "Género": persona.genero or "",
-                "Ocupación": persona.ocupacion or "",
-                "Ubicación": persona.ubicacion or "",
-                "Intereses": ", ".join(p_intereses) if p_intereses else "",
-                "Resumen": analisis.resumen or "",
-                "Último Contacto": (analisis.start_conversation or analisis.fecha_analisis).strftime("%Y-%m-%d %H:%M:%S"),
-            })
+                # Filtro por propietario
+                if candidato_ids_owner is not None and persona.candidato_id not in candidato_ids_owner: continue
+                
+                # Filtros demográficos
+                if busqueda.genero and persona.genero != busqueda.genero: continue
+                if busqueda.edad_min and (not persona.edad or persona.edad < busqueda.edad_min): continue
+                if busqueda.edad_max and (not persona.edad or persona.edad > busqueda.edad_max): continue
+                if busqueda.ubicacion and (not persona.ubicacion or busqueda.ubicacion.lower() not in persona.ubicacion.lower()): continue
+                
+                p_intereses = [i.categoria for i in persona.intereses] if persona.intereses else []
+                if busqueda.intereses:
+                     if not any(i in p_intereses for i in busqueda.intereses): continue
+                
+                personas_vistas.add(persona.id)
+                data.append({
+                    "ID Persona": persona.id,
+                    "Nombre Completo": persona.nombre_completo or "",
+                    "Usuario Facebook": persona.facebook_username or "",
+                    "Usuario Instagram": persona.instagram_username or "",
+                    "Teléfono": persona.telefono or "",
+                    "Email": persona.email or "",
+                    "Edad": persona.edad or "",
+                    "Género": persona.genero or "",
+                    "Ocupación": persona.ocupacion or "",
+                    "Ubicación": persona.ubicacion or "",
+                    "Intereses": ", ".join(p_intereses) if p_intereses else "",
+                    "Resumen": analisis.resumen or "",
+                    "Último Contacto": (analisis.start_conversation or analisis.fecha_analisis).strftime("%Y-%m-%d %H:%M:%S"),
+                })
         
     df = pd.DataFrame(data)
     
