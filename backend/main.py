@@ -2803,6 +2803,26 @@ def debug_facebook_pages(access_token: Optional[str] = Query(None), password: Op
     return result
 
 
+@app.post("/api/debug/test-agente")
+def debug_test_agente(
+    mensaje: str = Query(..., description="Mensaje a analizar"),
+    nombre_usuario: str = Query("Juan Pérez", description="Nombre del ciudadano"),
+    plataforma: str = Query("facebook"),
+    password: Optional[str] = Query(None)
+):
+    """Probar el agente IA con un mensaje custom (protegido por contraseña)."""
+    if config.DEBUG_PASSWORD and password != config.DEBUG_PASSWORD:
+        raise HTTPException(status_code=403, detail="Contraseña de debug requerida (?password=...)")
+    
+    from backend.agent.langgraph_agent import procesar_conversacion
+    resultado = procesar_conversacion(
+        mensaje=mensaje,
+        plataforma=plataforma,
+        nombre_usuario=nombre_usuario
+    )
+    return resultado
+
+
 @app.get("/api/debug/status")
 def debug_status(password: Optional[str] = Query(None)):
     """Estado de los DataFrames y logs de sincronización (protegido por contraseña)."""
