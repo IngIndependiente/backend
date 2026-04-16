@@ -112,15 +112,17 @@ class MetaAPIClient:
             plataforma: "facebook" o "instagram"
             
         Returns:
-            Respuesta de la API
-        """
-        if plataforma == "facebook":
-            url = f"{self.base_url}/me/messages"
-            token = self.facebook_token
-        else:  # instagram
-            url = f"{self.base_url}/me/messages"
-            token = self.instagram_token
+            Respuesta de la API (dict no vacío si fue exitoso)
         
+        Raises:
+            RuntimeError: Si la API de Meta devuelve un error, con el detalle del error.
+        """
+        # Both Facebook Messenger and Instagram DM via Messenger Platform
+        # (graph.facebook.com) require the Page Access Token, not the Instagram
+        # user token. The instagram_token (IGAAU...) is only for graph.instagram.com.
+        url = f"{self.base_url}/me/messages"
+        token = self.facebook_token
+
         payload = {
             "recipient": {"id": recipient_id},
             "messaging_type": "RESPONSE",
@@ -128,22 +130,32 @@ class MetaAPIClient:
                 "text": text
             }
         }
-        
+
         headers = {
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json"
         }
-        
+
         try:
             response = requests.post(url, json=payload, headers=headers)
-            response.raise_for_status()
-            print(f"✅ Mensaje enviado a {recipient_id}")
-            return response.json()
-        except Exception as e:
-            print(f"❌ Error enviando mensaje: {e}")
-            if hasattr(e, 'response') and e.response:
-                print(f"   Respuesta: {e.response.text}")
-            return {}
+        except requests.exceptions.RequestException as e:
+            print(f"❌ Error de red enviando mensaje: {e}")
+            raise RuntimeError(f"Error de red al contactar la API de Meta: {e}") from e
+
+        if not response.ok:
+            try:
+                error_data = response.json().get("error", {})
+                error_msg = error_data.get("message", response.text)
+                error_code = error_data.get("code", response.status_code)
+            except Exception:
+                error_msg = response.text
+                error_code = response.status_code
+            print(f"❌ Meta API error {error_code} enviando a {recipient_id} ({plataforma}): {error_msg}")
+            raise RuntimeError(f"Meta API error {error_code}: {error_msg}")
+
+        result = response.json()
+        print(f"✅ Mensaje enviado a {recipient_id} ({plataforma})")
+        return result
 
     def obtener_info_pagina(self) -> Dict[str, Any]:
         """

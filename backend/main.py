@@ -2449,9 +2449,10 @@ def responder_conversacion(analisis_id: int, reply: ReplyRequest):
                     )
 
             # Send via Meta API
-            resultado = cliente.enviar_mensaje_simple(recipient_id, texto, plataforma)
-            if not resultado:
-                raise HTTPException(status_code=502, detail="Error al enviar el mensaje a través de la API de Meta")
+            try:
+                resultado = cliente.enviar_mensaje_simple(recipient_id, texto, plataforma)
+            except RuntimeError as meta_err:
+                raise HTTPException(status_code=502, detail=str(meta_err))
 
             # Save sent message
             ConversacionService.guardar_conversacion(
@@ -2497,9 +2498,10 @@ def responder_conversacion(analisis_id: int, reply: ReplyRequest):
                         )
 
                 # Send via Meta API
-                resultado = cliente.enviar_mensaje_simple(recipient_id, texto, plataforma)
-                if not resultado:
-                    raise HTTPException(status_code=502, detail="Error al enviar el mensaje a través de la API de Meta")
+                try:
+                    resultado = cliente.enviar_mensaje_simple(recipient_id, texto, plataforma)
+                except RuntimeError as meta_err:
+                    raise HTTPException(status_code=502, detail=str(meta_err))
 
                 # Save sent message (SQLAlchemy requires db as first arg)
                 ConversacionService.guardar_conversacion(
