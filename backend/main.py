@@ -2414,6 +2414,19 @@ def responder_conversacion(analisis_id: int, reply: ReplyRequest):
     if not texto:
         raise HTTPException(status_code=400, detail="El texto de la respuesta no puede estar vacío")
 
+    def _str(val) -> Optional[str]:
+        """Return val as a stripped string only if it is a valid non-null/non-NaN value."""
+        if val is None:
+            return None
+        try:
+            import pandas as pd
+            if pd.isna(val):
+                return None
+        except (TypeError, ValueError):
+            pass
+        s = str(val).strip()
+        return s if s else None
+
     try:
         if USE_DATAFRAMES:
             # ── DataFrame mode ──────────────────────────────────────────────
@@ -2423,9 +2436,9 @@ def responder_conversacion(analisis_id: int, reply: ReplyRequest):
             persona = PersonaService.obtener_persona_por_id(analisis['persona_id'])
             if not persona:
                 raise HTTPException(status_code=404, detail="Persona no encontrada")
-            plataforma = persona.get('plataforma', '')
-            facebook_id = persona.get('facebook_id')
-            instagram_id = persona.get('instagram_id')
+            plataforma = _str(persona.get('plataforma')) or ''
+            facebook_id = _str(persona.get('facebook_id'))
+            instagram_id = _str(persona.get('instagram_id'))
             candidato_id = persona.get('candidato_id')
             persona_id = analisis['persona_id']
 
@@ -2436,6 +2449,8 @@ def responder_conversacion(analisis_id: int, reply: ReplyRequest):
                 recipient_id = facebook_id
                 plataforma = 'facebook'
             else:
+                print(f"[responder] Sin destinatario — persona_id={persona_id} plataforma={plataforma!r} "
+                      f"facebook_id={persona.get('facebook_id')!r} instagram_id={persona.get('instagram_id')!r}")
                 raise HTTPException(status_code=400, detail="No se encontró ID de destinatario. Solo Facebook Messenger e Instagram Direct son soportados.")
 
             # Get candidato tokens
@@ -2473,8 +2488,8 @@ def responder_conversacion(analisis_id: int, reply: ReplyRequest):
                 if not persona:
                     raise HTTPException(status_code=404, detail="Persona no encontrada")
                 plataforma = persona.plataforma or ''
-                facebook_id = persona.facebook_id
-                instagram_id = persona.instagram_id
+                facebook_id = _str(persona.facebook_id)
+                instagram_id = _str(persona.instagram_id)
                 candidato_id = persona.candidato_id
                 persona_id = persona.id
 
@@ -2485,6 +2500,8 @@ def responder_conversacion(analisis_id: int, reply: ReplyRequest):
                     recipient_id = facebook_id
                     plataforma = 'facebook'
                 else:
+                    print(f"[responder] Sin destinatario — persona_id={persona_id} plataforma={plataforma!r} "
+                          f"facebook_id={persona.facebook_id!r} instagram_id={persona.instagram_id!r}")
                     raise HTTPException(status_code=400, detail="No se encontró ID de destinatario. Solo Facebook Messenger e Instagram Direct son soportados.")
 
                 # Get candidato tokens
